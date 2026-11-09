@@ -2,7 +2,7 @@
 #   brew install xcodegen && xcodegen generate
 name: BillInsights
 options:
-  bundleIdPrefix: com.example
+  bundleIdPrefix: com.harshitkumawat
   deploymentTarget:
     iOS: "26.0"
 packages:
@@ -18,7 +18,7 @@ targets:
       - package: BillCore
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.billinsights
+        PRODUCT_BUNDLE_IDENTIFIER: com.harshitkumawat.billinsights
         INFOPLIST_FILE: Config/Info.plist
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: Bill Insights
