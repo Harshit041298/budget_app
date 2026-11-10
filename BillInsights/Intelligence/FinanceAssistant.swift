@@ -2,62 +2,113 @@ import Foundation
 import FoundationModels
 import BillCore
 
+/// Where an answer came from — shown under each reply.
+enum AnswerSource: Equatable {
+    case calculated          // exact, computed on device by AskEngine
+    case cloud(String)       // Claude model name; only a summary was sent
+    case onDevice            // Apple's on-device model
+    case facts               // model failed; raw computed facts shown
+
+    var label: String {
+        switch self {
+        case .calculated: return "Calculated from your data on this iPhone"
+        case .cloud(let name): return "\(name) · a short summary was sent"
+        case .onDevice: return "On-device AI"
+        case .facts: return "Computed facts"
+        }
+    }
+}
+
+struct AskReply {
+    let text: String
+    let source: AnswerSource
+}
+
 /// "Ask about my money" chat.
 ///
-/// The on-device model has a small (~4k token) window and is weak at maths, so
-/// for every question the app first computes an exact fact sheet in code
-/// (AskContextBuilder) and the model only turns it into a friendly answer.
-/// Each question gets a fresh session carrying just the previous exchange, so
-/// long chats never overflow.
+/// 1. AskEngine answers number questions exactly, with no model at all.
+/// 2. Open-ended / advice questions go to Claude if the user enabled it,
+///    otherwise to Apple's on-device model — either way with an exact fact
+///    sheet computed by the app (AskContextBuilder), so the model never does maths.
 @MainActor
 final class FinanceAssistant {
     private let facts: [TxnFact]
     private var lastExchange: (question: String, answer: String)?
+    private var lastQuery: AskEngine.Query?
 
     init(facts: [TxnFact], now: Date = Date()) {
         self.facts = facts
     }
 
     private static let instructions = """
-    You are a friendly personal-finance assistant on the user's iPhone. Amounts are Canadian dollars. \
-    Answer ONLY from the data given; never invent numbers. Be specific: name merchants and amounts. \
-    Never suggest cutting rent/housing, insurance, utilities or health costs. Reply in 2-5 short sentences.
+    You are a friendly, practical personal-finance assistant for a user in Canada. Amounts are Canadian dollars. \
+    Answer ONLY from the data given; never invent numbers, merchants or dates. Be specific: name merchants and amounts. \
+    Never suggest cutting rent/housing, insurance, utilities or health costs. Keep replies short: 2-6 sentences or a few bullets.
     """
 
-    func ask(_ question: String) async throws -> String {
+    func ask(_ question: String) async -> AskReply {
+        let now = Date()
+        let query = AskEngine.parse(question, facts: facts, previous: lastQuery, now: now)
+        lastQuery = query
+        if let exact = AskEngine.answer(query, facts: facts, now: now) {
+            lastExchange = (question, exact)
+            return AskReply(text: exact, source: .calculated)
+        }
+
         let target = UserDefaults.standard.double(forKey: "savingsTarget")
         let income = UserDefaults.standard.double(forKey: "incomeOverride")
-        let context = AskContextBuilder.build(question: question, facts: facts,
-                                              savingsTarget: target > 0 ? target : nil,
-                                              incomeOverride: income > 0 ? income : nil)
-        var prompt = "Today is \(DateParsing.isoDay.string(from: Date())).\nData (exact, computed by the app):\n\(context)\n"
-        if let last = lastExchange {
-            prompt += "\nPrevious question: \(last.question.prefix(200))\nPrevious answer: \(last.answer.prefix(300))\n"
+        let enriched = question + (query.hasSubject ? " (about: \(query.subjectText))" : "")
+        func facts(_ max: Int) -> String {
+            AskContextBuilder.build(question: enriched, facts: self.facts, now: now,
+                                    savingsTarget: target > 0 ? target : nil,
+                                    incomeOverride: income > 0 ? income : nil, maxCharacters: max)
         }
-        prompt += "\nQuestion: \(question)"
+        var prompt = "Today is \(DateParsing.isoDay.string(from: now)).\nData (exact, computed by the app):\n"
+        if let last = lastExchange {
+            prompt += ""
+            prompt = "Previous question: \(last.question.prefix(200))\nPrevious answer: \(last.answer.prefix(400))\n\n" + prompt
+        }
 
-        let answer: String
-        do {
-            let session = LanguageModelSession(tools: [FindTransactionsTool(facts: facts)], instructions: Self.instructions)
-            answer = try await session.respond(to: prompt).content
-        } catch {
-            // Retry lean: no tools, no history, shorter data.
+        if CloudAI.isReady {
             do {
-                let short = AskContextBuilder.build(question: question, facts: facts,
-                                                    savingsTarget: target > 0 ? target : nil,
-                                                    incomeOverride: income > 0 ? income : nil, maxCharacters: 900)
-                let session = LanguageModelSession(instructions: Self.instructions)
-                answer = try await session.respond(to: "Data:\n\(short)\n\nQuestion: \(question)").content
+                let text = try await CloudAI.complete(system: Self.instructions,
+                                                      prompt: prompt + facts(4000) + "\n\nQuestion: \(question)")
+                lastExchange = (question, text)
+                return AskReply(text: text, source: .cloud(CloudAI.model.displayName))
             } catch {
-                // Last resort: show the computed facts directly.
-                answer = "Here's what I found:\n" + context.split(separator: "\n").prefix(4).joined(separator: "\n")
+                // Fall through to the on-device model, but tell the user why.
+                let local = await onDevice(prompt: prompt, facts: facts, question: question)
+                return AskReply(text: local.text + "\n\n_(Claude unavailable: \(error.localizedDescription))_", source: local.source)
             }
         }
-        lastExchange = (question, answer)
-        return answer
+        return await onDevice(prompt: prompt, facts: facts, question: question)
     }
 
-    func reset() { lastExchange = nil }
+    private func onDevice(prompt: String, facts: (Int) -> String, question: String) async -> AskReply {
+        guard LocalLLM.isAvailable else {
+            return AskReply(text: "Here's what I found:\n" + facts(1200), source: .facts)
+        }
+        do {
+            let session = LanguageModelSession(instructions: Self.instructions)
+            let text = try await session.respond(to: prompt + facts(1800) + "\n\nQuestion: \(question)").content
+            lastExchange = (question, text)
+            return AskReply(text: text, source: .onDevice)
+        } catch {
+            do {
+                let session = LanguageModelSession(instructions: Self.instructions)
+                let text = try await session.respond(to: "Data:\n\(facts(900))\n\nQuestion: \(question)").content
+                lastExchange = (question, text)
+                return AskReply(text: text, source: .onDevice)
+            } catch {
+                return AskReply(text: "Here's what I found:\n" + facts(1200), source: .facts)
+            }
+        }
+    }
+
+    func reset() {
+        lastExchange = nil
+        lastQuery = nil
+    }
 }
 
 // MARK: - Tools

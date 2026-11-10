@@ -28,6 +28,8 @@ struct AskView: View {
                 switch LocalLLM.status {
                 case .ready:
                     chat
+                case .unavailable where CloudAI.isReady:
+                    chat
                 case .unavailable(let reason):
                     ContentUnavailableView {
                         Label("On-device AI unavailable", systemImage: "sparkles")
@@ -150,10 +152,8 @@ struct AskView: View {
         Task {
             defer { thinking = false }
             do {
-                let answer = try await assistant!.ask(q)
-                messages.append(ChatMessage(text: answer, fromUser: false))
-            } catch {
-                messages.append(ChatMessage(text: "Sorry, I couldn't answer that. Try asking in a different way.", fromUser: false))
+                let reply = await assistant!.ask(q)
+                messages.append(ChatMessage(text: reply.text, fromUser: false, source: reply.source.label))
             }
         }
     }
@@ -163,6 +163,7 @@ struct ChatMessage: Identifiable, Equatable {
     let id = UUID()
     let text: String
     let fromUser: Bool
+    var source: String? = nil
 }
 
 private struct Bubble: View {
@@ -171,6 +172,7 @@ private struct Bubble: View {
     var body: some View {
         HStack(alignment: .bottom) {
             if message.fromUser { Spacer(minLength: 48) }
+            VStack(alignment: .leading, spacing: 4) {
             Text(LocalizedStringKey(message.text))
                 .font(.body)
                 .padding(.horizontal, 14)
@@ -180,6 +182,10 @@ private struct Bubble: View {
                             in: RoundedRectangle(cornerRadius: 18))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
+                if let source = message.source {
+                    Text(source).font(.caption2).foregroundStyle(.tertiary).padding(.leading, 6)
+                }
+            }
             if !message.fromUser { Spacer(minLength: 48) }
         }
         .frame(maxWidth: .infinity, alignment: message.fromUser ? .trailing : .leading)

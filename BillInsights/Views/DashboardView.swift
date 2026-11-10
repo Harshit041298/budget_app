@@ -46,6 +46,7 @@ struct DashboardView: View {
     @State private var scope: SpendScope = .all
     @State private var didPickInitialMonth = false
     @State private var report: GenInsightReport?
+    @State private var cloudReport: String?
     @State private var reportMonth: Date?
     @State private var generating = false
     @State private var reportError: String?
@@ -703,7 +704,10 @@ struct DashboardView: View {
     @ViewBuilder
     private func aiCard(facts: [TxnFact]) -> some View {
         Card(title: "AI insights", systemImage: "sparkles") {
-            if let report, reportMonth == month {
+            if let cloudReport, reportMonth == month {
+                Text(LocalizedStringKey(cloudReport)).font(.subheadline)
+                Text("\(CloudAI.model.displayName) · a short summary was sent").font(.caption2).foregroundStyle(.tertiary)
+            } else if let report, reportMonth == month {
                 Text(report.headline).font(.subheadline.bold())
                 ForEach(Array(report.insights.enumerated()), id: \.offset) { _, i in
                     VStack(alignment: .leading, spacing: 2) {
@@ -720,6 +724,20 @@ struct DashboardView: View {
                     Label(line, systemImage: "checkmark.circle").font(.subheadline)
                 }
             }
+            if CloudAI.isReady {
+                Button {
+                    Task { await generate(facts: facts) }
+                } label: {
+                    if generating {
+                        ProgressView().frame(maxWidth: .infinity)
+                    } else {
+                        Label(reportMonth == month ? "Regenerate with Claude" : "Generate with Claude", systemImage: "wand.and.stars")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(generating)
+            } else {
             switch LocalLLM.status {
             case .ready:
                 Button {
@@ -738,6 +756,7 @@ struct DashboardView: View {
             case .unavailable(let why):
                 Text(why).font(.caption).foregroundStyle(.secondary)
             }
+            }
             if let reportError {
                 Text(reportError).font(.caption).foregroundStyle(.red)
             }
@@ -749,7 +768,17 @@ struct DashboardView: View {
         reportError = nil
         defer { generating = false }
         do {
-            report = try await LocalLLM.insightReport(brief: SpendingAnalytics.llmBrief(facts, month: month))
+            let brief = SpendingAnalytics.llmBrief(facts, month: month)
+            if CloudAI.isReady {
+                cloudReport = try await CloudAI.complete(system: """
+                You are a friendly, concise personal-finance coach in Canada. Use ONLY the numbers in the data; never invent \
+                merchants or amounts. Never suggest cutting rent, insurance, utilities or health costs. Write a one-line \
+                **headline**, then 4 short bullet insights with exact dollar figures, then one **Saving tip** line.
+                """, prompt: "Here is my spending data:\n\(brief)", effort: "medium")
+            } else {
+                cloudReport = nil
+                report = try await LocalLLM.insightReport(brief: brief)
+            }
             reportMonth = month
         } catch {
             reportError = "Couldn't generate insights: \(error.localizedDescription)"

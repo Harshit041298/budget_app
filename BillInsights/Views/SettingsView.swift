@@ -28,6 +28,18 @@ struct SettingsView: View {
                     LabeledContent("Learned merchant rules", value: "\(rules.count)")
                 }
 
+                Section("AI") {
+                    NavigationLink {
+                        CloudAISettingsView()
+                    } label: {
+                        LabeledContent {
+                            Text(CloudAI.isReady ? CloudAI.model.displayName : "Off")
+                        } label: {
+                            Label("Cloud AI (Claude)", systemImage: "cloud")
+                        }
+                    }
+                }
+
                 Section("Planning") {
                     NavigationLink { SavingsCoachView() } label: { Label("Savings coach", systemImage: "banknote") }
                     NavigationLink { BudgetsView() } label: { Label("Budgets", systemImage: "gauge.with.dots.needle.50percent") }

@@ -16,6 +16,7 @@ struct SavingsCoachView: View {
     @State private var draftTarget: Double?
     @State private var draftIncome: Double?
     @State private var advice: GenSavingsAdvice?
+    @State private var cloudAdvice: String?
     @State private var thinking = false
     @State private var adviceError: String?
     @State private var applied = false
@@ -111,7 +112,10 @@ struct SavingsCoachView: View {
             }
 
             Section {
-                if let advice {
+                if let cloudAdvice {
+                    Text(LocalizedStringKey(cloudAdvice)).font(.subheadline)
+                    Text("\(CloudAI.model.displayName) · a short summary was sent").font(.caption2).foregroundStyle(.tertiary)
+                } else if let advice {
                     Text(advice.summary).font(.subheadline.bold())
                     ForEach(Array(advice.tips.enumerated()), id: \.offset) { _, tip in
                         VStack(alignment: .leading, spacing: 3) {
@@ -126,6 +130,18 @@ struct SavingsCoachView: View {
                         }
                     }
                 }
+                if CloudAI.isReady {
+                    Button {
+                        Task { await coach(plan: plan, facts: facts) }
+                    } label: {
+                        if thinking {
+                            HStack { ProgressView(); Text("Asking \(CloudAI.model.displayName)…") }
+                        } else {
+                            Label(cloudAdvice == nil ? "Get personal tips from Claude" : "Get new tips", systemImage: "sparkles")
+                        }
+                    }
+                    .disabled(thinking || entries.isEmpty)
+                } else {
                 switch LocalLLM.status {
                 case .ready:
                     Button {
@@ -140,6 +156,7 @@ struct SavingsCoachView: View {
                     .disabled(thinking || entries.isEmpty)
                 case .unavailable(let why):
                     Text(why).font(.caption).foregroundStyle(.secondary)
+                }
                 }
                 if let adviceError { Text(adviceError).font(.caption).foregroundStyle(.red) }
             } header: {
@@ -191,7 +208,17 @@ struct SavingsCoachView: View {
         adviceError = nil
         defer { thinking = false }
         do {
-            advice = try await LocalLLM.savingsAdvice(brief: SavingsPlanner.brief(plan, facts: facts))
+            let brief = SavingsPlanner.brief(plan, facts: facts)
+            if CloudAI.isReady {
+                cloudAdvice = try await CloudAI.complete(system: """
+                You are a practical, kind personal-finance coach in Canada. Use ONLY the numbers and merchants in the data. \
+                Never suggest cutting rent, insurance, utilities or medical costs. Give one sentence summarising how the goal \
+                can be reached, then 5 bullet points, each a concrete action naming real merchants/categories with an estimated \
+                monthly saving in dollars. Use **bold** for each action.
+                """, prompt: "My data:\n\(brief)", effort: "medium")
+            } else {
+                advice = try await LocalLLM.savingsAdvice(brief: brief)
+            }
         } catch {
             adviceError = "Couldn't get tips: \(error.localizedDescription)"
         }
