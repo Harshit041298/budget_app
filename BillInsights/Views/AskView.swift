@@ -16,6 +16,7 @@ struct AskView: View {
         "How much did I spend on food last month?",
         "What are my subscriptions costing me?",
         "What did I buy on Amazon recently?",
+        "How can I save $1,500 a month?",
         "Where can I cut back?",
         "What was my biggest purchase this month?",
         "How much did I spend on my credit cards vs debit?"

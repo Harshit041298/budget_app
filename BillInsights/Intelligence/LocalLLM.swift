@@ -74,6 +74,24 @@ struct GenInsightReport {
 }
 
 @Generable
+struct GenSavingsAdvice {
+    @Guide(description: "One encouraging sentence summarising how the goal can be reached, with numbers")
+    var summary: String
+    @Guide(description: "Specific actions that use the user's real merchants and amounts", .count(5))
+    var tips: [GenSavingsTip]
+}
+
+@Generable
+struct GenSavingsTip {
+    @Guide(description: "Short action, 3-7 words, e.g. 'Cook at home on weeknights'")
+    var title: String
+    @Guide(description: "One or two sentences naming the merchant or category and the dollar figures")
+    var detail: String
+    @Guide(description: "Estimated monthly saving in dollars")
+    var monthlySaving: Double
+}
+
+@Generable
 struct GenInsight {
     @Guide(description: "Short title, 2-5 words")
     var title: String
@@ -205,6 +223,17 @@ enum LocalLLM {
         """)
         let r = try await session.respond(to: "Here is my spending data:\n\(brief)\n\nWrite my monthly insight report.",
                                           generating: GenInsightReport.self)
+        return r.content
+    }
+
+    static func savingsAdvice(brief: String) async throws -> GenSavingsAdvice {
+        let session = LanguageModelSession(instructions: """
+        You are a practical, kind personal-finance coach in Canada. Use ONLY the numbers and merchants in the data. \
+        Never suggest cutting rent, insurance, utilities or medical costs. Prefer concrete swaps \
+        (e.g. fewer Uber Eats orders, cancel an unused streaming service) over vague advice.
+        """)
+        let r = try await session.respond(to: "My data:\n\(brief)\n\nGive me a plan to reach my monthly savings goal.",
+                                          generating: GenSavingsAdvice.self)
         return r.content
     }
 

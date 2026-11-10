@@ -25,7 +25,8 @@ final class FinanceAssistant {
         let tools: [any Tool] = [
             SpendingTotalsTool(facts: facts),
             FindTransactionsTool(facts: facts),
-            RecurringChargesTool(facts: facts, now: now)
+            RecurringChargesTool(facts: facts, now: now),
+            SavingsPlanTool(facts: facts, now: now)
         ]
         return LanguageModelSession(tools: tools, instructions: """
         You are a helpful personal-finance assistant running privately on the user's iPhone. \
@@ -165,5 +166,26 @@ struct RecurringChargesTool: Tool {
         return subs.map {
             "\($0.merchant): \(SpendingAnalytics.money($0.typicalAmount)) \($0.cadence.rawValue), about \(SpendingAnalytics.money($0.annualCost))/year, next around \(DateParsing.isoDay.string(from: $0.nextExpected))"
         }.joined(separator: "\n")
+    }
+}
+
+struct SavingsPlanTool: Tool {
+    let name = "getSavingsPlan"
+    let description = "Given a monthly savings target, returns the user's average income, spending, current saving, the gap, and how much to cut in each flexible category to close it."
+    let facts: [TxnFact]
+    let now: Date
+
+    @Generable
+    struct Arguments {
+        @Guide(description: "Monthly savings target in dollars, e.g. 1500")
+        var monthlyTarget: Double
+    }
+
+    func call(arguments: Arguments) async throws -> String {
+        let override = UserDefaults.standard.double(forKey: "incomeOverride")
+        let baseline = SavingsPlanner.baseline(facts, now: now, incomeOverride: override > 0 ? override : nil)
+        let plan = SavingsPlanner.plan(baseline, target: max(0, arguments.monthlyTarget))
+        return SavingsPlanner.brief(plan, facts: facts, now: now)
+            + (plan.achievable ? "" : "\nThe flexible categories alone can't close the whole gap.")
     }
 }

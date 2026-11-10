@@ -29,6 +29,7 @@ struct SettingsView: View {
                 }
 
                 Section("Planning") {
+                    NavigationLink { SavingsCoachView() } label: { Label("Savings coach", systemImage: "banknote") }
                     NavigationLink { BudgetsView() } label: { Label("Budgets", systemImage: "gauge.with.dots.needle.50percent") }
                     NavigationLink { CategoryReviewView() } label: { Label("Review uncategorised", systemImage: "tag") }
                     NavigationLink { CategoriesView() } label: { Label("Categories", systemImage: "square.grid.2x2") }

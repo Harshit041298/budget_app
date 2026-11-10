@@ -146,6 +146,7 @@ struct DashboardView: View {
                 suggestionBanner(allFacts: allFacts)
                 ForEach(InsightCard.decode(layoutRaw)) { card in
                     switch card {
+                    case .savings: if scope == .all { savingsCard(facts: allFacts) }
                     case .review: reviewBanner(facts: facts, monthFacts: monthFacts, spend: spend)
                     case .accounts:
                         if scope == .all { accountsCard(monthFacts: SpendingAnalytics.inMonth(allFacts, month)) }
@@ -198,6 +199,37 @@ struct DashboardView: View {
                 .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
             }
             .buttonStyle(.plain)
+        }
+    }
+
+    private func savingsCard(facts: [TxnFact]) -> some View {
+        let target = UserDefaults.standard.double(forKey: "savingsTarget")
+        let incomeOverride = UserDefaults.standard.double(forKey: "incomeOverride")
+        return Card(title: "Savings goal", systemImage: "banknote") {
+            if target > 0 {
+                let progress = SavingsProgress(facts: facts, target: target, incomeOverride: incomeOverride > 0 ? incomeOverride : nil)
+                let plan = SavingsPlanner.plan(SavingsPlanner.baseline(facts, incomeOverride: incomeOverride > 0 ? incomeOverride : nil), target: target)
+                ProgressView(value: min(max(progress.projected / target, 0), 1))
+                    .tint(progress.projected >= target ? Color.green : Color.orange)
+                Text(progress.summary).font(.subheadline)
+                ForEach(plan.cuts.prefix(3)) { cut in
+                    HStack {
+                        Text(cut.name).font(.caption)
+                        Spacer()
+                        Text("\(money(cut.currentMonthly)) → \(money(cut.targetMonthly))").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                NavigationLink("Open savings coach") { SavingsCoachView() }.font(.subheadline)
+            } else {
+                Text("Tell the app how much you want to save each month (e.g. $1,200–$1,500) and it will show where to cut, from your real spending.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                NavigationLink {
+                    SavingsCoachView()
+                } label: {
+                    Label("Set a savings goal", systemImage: "target").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
         }
     }
 

@@ -3,13 +3,14 @@ import BillCore
 
 /// Cards the Insights tab can show. Users choose which ones and in what order.
 enum InsightCard: String, CaseIterable, Identifiable {
-    case review, accounts, budgets, calendar, categories, pace, history, categoryTrend, incomeVsSpend,
+    case savings, review, accounts, budgets, calendar, categories, pace, history, categoryTrend, incomeVsSpend,
          weekday, topMerchantsChart, ai, recurring, unusual, merchants, products
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
+        case .savings: return "Savings goal"
         case .review: return "Uncategorised reminder"
         case .accounts: return "Credit vs debit"
         case .budgets: return "Budgets"
@@ -31,6 +32,7 @@ enum InsightCard: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
+        case .savings: return "banknote"
         case .review: return "tag"
         case .accounts: return "creditcard.and.123"
         case .budgets: return "gauge.with.dots.needle.50percent"
@@ -52,6 +54,7 @@ enum InsightCard: String, CaseIterable, Identifiable {
 
     var blurb: String {
         switch self {
+        case .savings: return "Progress toward your monthly savings goal, and where to cut."
         case .review: return "Reminds you to file uncategorised merchants."
         case .accounts: return "Credit cards vs debit, and spend per card."
         case .budgets: return "Progress bars for your monthly limits."
@@ -72,7 +75,7 @@ enum InsightCard: String, CaseIterable, Identifiable {
     }
 
     static let defaultLayout: [InsightCard] = [
-        .review, .calendar, .accounts, .budgets, .categories, .pace, .weekday, .history, .ai, .recurring, .unusual, .merchants, .products
+        .savings, .review, .calendar, .accounts, .budgets, .categories, .pace, .weekday, .history, .ai, .recurring, .unusual, .merchants, .products
     ]
 
     // MARK: Persistence (comma-separated raw values in AppStorage)
@@ -106,6 +109,9 @@ struct CardSuggestion: Identifiable {
         let thisMonth = SpendingAnalytics.inMonth(facts, now)
         let monthlyAvg = months > 0 ? SpendingAnalytics.totalSpend(facts) / Double(months) : 0
 
+        if UserDefaults.standard.double(forKey: "savingsTarget") <= 0 {
+            add(.savings, "Set a monthly savings goal — the app will show exactly where to cut to reach it.")
+        }
         if !thisMonth.isEmpty {
             let days = SpendingAnalytics.dailyTotals(facts, month: now)
             if let big = days.max(by: { $0.value < $1.value }) {

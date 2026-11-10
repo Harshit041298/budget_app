@@ -273,3 +273,31 @@ final class ParseAmountTests: XCTestCase {
         XCTAssertNil(LiveMatcher.parseAmount("Store 7"))
     }
 }
+
+final class SavingsPlannerTests: XCTestCase {
+    func day(_ m: Int, _ d: Int) -> Date { DateParsing.make(year: 2026, month: m, day: d)! }
+
+    func testPlanCoversGapFromFlexibleCategoriesOnly() {
+        var facts: [TxnFact] = []
+        for m in 7...9 {
+            facts.append(TxnFact(date: day(m, 1), merchant: "Payroll", amount: 4000, isCredit: true, category: .income))
+            facts.append(TxnFact(date: day(m, 2), merchant: "Landlord", amount: 1800, isCredit: false, category: .housing))
+            facts.append(TxnFact(date: day(m, 5), merchant: "Keg", amount: 600, isCredit: false, category: .dining))
+            facts.append(TxnFact(date: day(m, 9), merchant: "Amazon", amount: 800, isCredit: false, category: .shopping))
+        }
+        let b = SavingsPlanner.baseline(facts, months: 3, now: day(10, 15))
+        XCTAssertEqual(b.months, 3)
+        XCTAssertEqual(b.avgIncome, 4000, accuracy: 0.01)
+        XCTAssertEqual(b.avgSaved, 800, accuracy: 0.01)
+        let plan = SavingsPlanner.plan(b, target: 1200)
+        XCTAssertEqual(plan.gap, 400, accuracy: 0.01)
+        XCTAssertTrue(plan.achievable)
+        XCTAssertGreaterThanOrEqual(plan.plannedSaving, 400)
+        XCTAssertFalse(plan.cuts.contains { $0.base == .housing })
+    }
+
+    func testAlreadyOnTrack() {
+        let b = SavingsBaseline(months: 3, avgIncome: 5000, avgSpend: 3000, categories: [])
+        XCTAssertEqual(SavingsPlanner.plan(b, target: 1500).gap, 0)
+    }
+}
