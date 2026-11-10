@@ -24,10 +24,12 @@ enum Alerts {
         let budgets = (try? context.fetch(FetchDescriptor<CategoryBudget>())) ?? []
         guard !budgets.isEmpty else { return }
         let facts = AppData.facts(context: context)
+        let catalog = CategoryCatalog.load(context)
         let monthKey = DateParsing.isoMonth.string(from: now)
         let defaults = UserDefaults.standard
         for b in budgets where b.monthlyLimit > 0 {
-            let spent = SpendingAnalytics.spend(in: b.category, facts, month: now)
+            let spent = SpendingAnalytics.spend(forKey: b.categoryRaw, facts, month: now)
+            let name = catalog.info(key: b.categoryRaw).name
             let ratio = spent / b.monthlyLimit
             let level = ratio >= 1 ? 100 : (ratio >= 0.8 ? 80 : 0)
             guard level > 0 else { continue }
@@ -35,7 +37,7 @@ enum Alerts {
             guard !defaults.bool(forKey: key) else { continue }
             defaults.set(true, forKey: key)
             let content = UNMutableNotificationContent()
-            content.title = level == 100 ? "\(b.category.displayName) budget exceeded" : "\(b.category.displayName) budget at \(Int(ratio * 100))%"
+            content.title = level == 100 ? "\(name) budget exceeded" : "\(name) budget at \(Int(ratio * 100))%"
             content.body = "\(SpendingAnalytics.money(spent)) of \(SpendingAnalytics.money(b.monthlyLimit)) spent this month."
             content.sound = .default
             try? await UNUserNotificationCenter.current().add(

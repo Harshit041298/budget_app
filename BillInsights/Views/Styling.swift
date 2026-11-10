@@ -54,15 +54,28 @@ extension SpendCategory {
 }
 
 struct CategoryIcon: View {
-    let category: SpendCategory
+    let symbol: String
+    let color: Color
     var size: CGFloat = 34
 
+    init(category: SpendCategory, size: CGFloat = 34) {
+        symbol = category.symbol
+        color = category.color
+        self.size = size
+    }
+
+    init(info: CategoryInfo, size: CGFloat = 34) {
+        symbol = info.symbol
+        color = info.color
+        self.size = size
+    }
+
     var body: some View {
-        Image(systemName: category.symbol)
+        Image(systemName: symbol)
             .font(.system(size: size * 0.45, weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: size, height: size)
-            .background(category.color.gradient, in: RoundedRectangle(cornerRadius: size * 0.3))
+            .background(color.gradient, in: RoundedRectangle(cornerRadius: size * 0.3))
     }
 }
 

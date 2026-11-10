@@ -118,9 +118,7 @@ final class ImportService {
         }
 
         status = "Categorising…"
-        let rules = (try? context.fetch(FetchDescriptor<MerchantRule>())) ?? []
-        let labeledEntries = (try? context.fetch(FetchDescriptor<LedgerEntry>(predicate: #Predicate<LedgerEntry> { $0.userSetCategory == true }))) ?? []
-        let categorizer = Categorizer(rules: rules, labeled: labeledEntries.map { ($0.merchant, $0.category) })
+        let categorizer = Categorizer.load(context)
 
         let existing = Set(((try? context.fetch(FetchDescriptor<LedgerEntry>())) ?? []).map(\.fingerprint))
         let doc = ImportedDocument(filename: filename, kind: result.kind, extractedText: String(text.prefix(200_000)),
@@ -143,6 +141,8 @@ final class ImportService {
                                     excluded: result.kind == .amazonOrderHistory)
             // Credits in a spending category are refunds; other credits are usually payments or deposits.
             if parsed.isCredit && cat.source == .fallback { entry.category = .transfer }
+            entry.customCategoryKey = cat.customKey
+            entry.account = Self.accountKey(for: parsed, kind: result.kind)
             entry.document = doc
             context.insert(entry)
             added.append(entry)
@@ -159,6 +159,8 @@ final class ImportService {
             if !answers.isEmpty { usedAI = true }
         }
 
+        CategoryLearning.applyRules(to: added, context: context)
+        Self.ensureAccounts(for: added, context: context)
         let linked = linkAmazonOrders(context: context)
         let merged = mergeApplePay(into: added, kind: result.kind, context: context)
         try context.save()
@@ -167,6 +169,61 @@ final class ImportService {
 
         return ImportSummary(filename: filename, kind: result.kind, added: added.count, duplicates: duplicates,
                              linkedOrders: linked, mergedApplePay: merged, usedAI: usedAI, warnings: result.warnings)
+    }
+
+    /// Which account a transaction belongs to. Credit-card exports carry the
+    /// card number; chequing exports and bank statements don't.
+    static func accountKey(for parsed: ParsedTransaction, kind: DocumentKind) -> String? {
+        if let a = parsed.account, !a.isEmpty { return a }
+        switch kind {
+        case .cibcCSV, .cibcBankStatement: return "CIBC Chequing"
+        case .cibcCreditCardStatement: return "CIBC Credit Card"
+        case .genericCSV, .aiExtracted: return "Bank account"
+        default: return nil
+        }
+    }
+
+    /// One-time upgrade for data imported before accounts existed.
+    static func backfillAccountsIfNeeded(context: ModelContext) {
+        let flag = "accountsBackfilled-v1"
+        guard !UserDefaults.standard.bool(forKey: flag) else { return }
+        let all = (try? context.fetch(FetchDescriptor<LedgerEntry>())) ?? []
+        for e in all where e.account == nil {
+            switch e.source {
+            case .cibcCSV, .cibcBankStatement: e.account = "CIBC Chequing"
+            case .cibcCreditCardStatement: e.account = "CIBC Credit Card"
+            case .genericCSV, .aiExtracted: e.account = "Bank account"
+            default: break
+            }
+        }
+        ensureAccounts(for: all, context: context)
+        try? context.save()
+        UserDefaults.standard.set(true, forKey: flag)
+    }
+
+    /// Creates Account records for new account keys, guessing credit vs debit.
+    static func ensureAccounts(for entries: [LedgerEntry], context: ModelContext) {
+        let known = Set(((try? context.fetch(FetchDescriptor<Account>())) ?? []).map(\.key))
+        var created = Set<String>()
+        for e in entries {
+            guard let key = e.account, !known.contains(key), created.insert(key).inserted else { continue }
+            let lower = key.lowercased()
+            let kind: AccountKind
+            if lower.contains("debit") || lower.contains("chequing") || lower.contains("checking") {
+                kind = .debit
+            } else if lower.contains("saving") {
+                kind = .savings
+            } else if e.source == .cibcCreditCardStatement || lower.contains("card ••") || lower.contains("visa")
+                        || lower.contains("mastercard") || lower.contains("amex") || lower.contains("credit") {
+                kind = .credit
+            } else if e.source == .cibcBankStatement {
+                kind = .debit
+            } else {
+                kind = .other
+            }
+            let name = key.hasPrefix("Card ••") ? "CIBC Credit Card \(key.dropFirst(5))" : key
+            context.insert(Account(key: key, name: name, kind: kind))
+        }
     }
 
     private func looksMultiLine(_ text: String) -> Bool {

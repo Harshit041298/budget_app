@@ -190,3 +190,34 @@ final class LiveMatcherTests: XCTestCase {
         XCTAssertGreaterThan(f!, 100)
     }
 }
+
+final class AccountAndCustomTests: XCTestCase {
+    func day(_ m: Int, _ d: Int) -> Date { DateParsing.make(year: 2026, month: m, day: d)! }
+
+    func testCustomCategoriesAndAccounts() {
+        let facts = [
+            TxnFact(date: day(10, 1), merchant: "A", amount: 50, isCredit: false, category: .shopping,
+                    customKey: "custom:x", customName: "Hobbies", account: "Visa ••1234", accountKind: "credit"),
+            TxnFact(date: day(10, 2), merchant: "B", amount: 30, isCredit: false, category: .shopping,
+                    account: "CIBC Chequing", accountKind: "debit"),
+            TxnFact(date: day(10, 3), merchant: "Card Payment", amount: 500, isCredit: true, category: .transfer,
+                    account: "Visa ••1234", accountKind: "credit")
+        ]
+        let cats = SpendingAnalytics.byCategoryKey(facts)
+        XCTAssertEqual(cats.first { $0.key == "custom:x" }?.name, "Hobbies")
+        XCTAssertEqual(cats.first { $0.key == "shopping" }?.total, 30)
+        let accounts = SpendingAnalytics.byAccount(facts)
+        XCTAssertEqual(accounts.first { $0.account == "Visa ••1234" }?.spend, 50)
+        XCTAssertEqual(accounts.first { $0.account == "Visa ••1234" }?.credits, 500)
+    }
+
+    func testPriceIncrease() {
+        var facts = (5...9).map { m in
+            TxnFact(date: day(m, 3), merchant: "Spotify", amount: 11.99, isCredit: false, category: .subscriptions)
+        }
+        facts.append(TxnFact(date: day(10, 3), merchant: "Spotify", amount: 12.99, isCredit: false, category: .subscriptions))
+        let changes = SpendingAnalytics.priceChanges(facts, now: day(10, 10))
+        XCTAssertEqual(changes.first?.newAmount, 12.99)
+        XCTAssertEqual(changes.first?.oldAmount, 11.99)
+    }
+}

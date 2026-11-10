@@ -11,9 +11,19 @@ public struct TxnFact: Sendable, Hashable, Identifiable {
     public var category: SpendCategory
     public var countsAsSpending: Bool
     public var items: [String]
+    /// Set when the user filed this under one of their own categories
+    /// (`category` then holds the custom category's parent).
+    public var customKey: String?
+    public var customName: String?
+    /// Account display name, e.g. "CIBC Dividend Visa", and its kind
+    /// ("credit", "debit", ...).
+    public var account: String?
+    public var accountKind: String?
 
     public init(id: UUID = UUID(), date: Date, merchant: String, amount: Double, isCredit: Bool,
-                category: SpendCategory, countsAsSpending: Bool = true, items: [String] = []) {
+                category: SpendCategory, countsAsSpending: Bool = true, items: [String] = [],
+                customKey: String? = nil, customName: String? = nil,
+                account: String? = nil, accountKind: String? = nil) {
         self.id = id
         self.date = date
         self.merchant = merchant
@@ -22,7 +32,15 @@ public struct TxnFact: Sendable, Hashable, Identifiable {
         self.category = category
         self.countsAsSpending = countsAsSpending
         self.items = items
+        self.customKey = customKey
+        self.customName = customName
+        self.account = account
+        self.accountKind = accountKind
     }
+
+    /// Key used for grouping: the custom category if any, else the built-in one.
+    public var categoryKey: String { customKey ?? category.rawValue }
+    public var categoryName: String { customName ?? category.displayName }
 
     /// Contribution to spending: purchases are positive, refunds negative,
     /// payments/transfers/income are zero.
@@ -39,6 +57,33 @@ public struct CategoryTotal: Sendable, Hashable, Identifiable {
     public var total: Double
     public var count: Int
     public var id: SpendCategory { category }
+}
+
+/// Totals per category key, including the user's custom categories.
+public struct CategoryKeyTotal: Sendable, Hashable, Identifiable {
+    public var key: String
+    public var name: String
+    public var base: SpendCategory
+    public var total: Double
+    public var count: Int
+    public var id: String { key }
+}
+
+public struct AccountTotal: Sendable, Hashable, Identifiable {
+    public var account: String
+    public var kind: String?
+    public var spend: Double
+    public var credits: Double
+    public var count: Int
+    public var id: String { account }
+}
+
+public struct PriceChange: Sendable, Hashable, Identifiable {
+    public var merchant: String
+    public var oldAmount: Double
+    public var newAmount: Double
+    public var date: Date
+    public var id: String { merchant }
 }
 
 public struct MonthTotal: Sendable, Hashable, Identifiable {
@@ -110,6 +155,54 @@ public enum SpendingAnalytics {
             .filter { $0.total > 0.005 }
             .sorted { $0.total > $1.total }
     }
+
+    public static func byCategoryKey(_ facts: [TxnFact]) -> [CategoryKeyTotal] {
+        var totals: [String: CategoryKeyTotal] = [:]
+        for f in facts where f.spend != 0 {
+            var t = totals[f.categoryKey] ?? CategoryKeyTotal(key: f.categoryKey, name: f.categoryName,
+                                                               base: f.category, total: 0, count: 0)
+            t.total += f.spend
+            t.count += 1
+            totals[f.categoryKey] = t
+        }
+        return totals.values.filter { $0.total > 0.005 }.sorted { $0.total > $1.total }
+    }
+
+    public static func spend(forKey key: String, _ facts: [TxnFact], month: Date) -> Double {
+        totalSpend(inMonth(facts, month).filter { $0.categoryKey == key })
+    }
+
+    /// Spending per account. Unassigned transactions are grouped as "Other".
+    public static func byAccount(_ facts: [TxnFact]) -> [AccountTotal] {
+        var totals: [String: AccountTotal] = [:]
+        for f in facts where f.countsAsSpending {
+            let name = f.account ?? "Unassigned"
+            var t = totals[name] ?? AccountTotal(account: name, kind: f.accountKind, spend: 0, credits: 0, count: 0)
+            t.spend += f.spend
+            if f.isCredit && !f.category.isSpending { t.credits += f.amount }
+            t.count += 1
+            totals[name] = t
+        }
+        return totals.values.filter { $0.spend > 0.005 || $0.credits > 0.005 }.sorted { $0.spend > $1.spend }
+    }
+
+    /// Recurring charges whose latest amount went up versus the previous one.
+    public static func priceChanges(_ facts: [TxnFact], now: Date = Date()) -> [PriceChange] {
+        recurring(facts, now: now).compactMap { r in
+            let charges = facts.filter { $0.merchant == r.merchant && !$0.isCredit }
+                .sorted { $0.date < $1.date }
+            guard charges.count >= 2 else { return nil }
+            let last = charges[charges.count - 1], prev = charges[charges.count - 2]
+            let diff = last.amount - prev.amount
+            guard diff >= 0.5, last.amount <= prev.amount * 1.6 else { return nil }
+            return PriceChange(merchant: r.merchant, oldAmount: prev.amount, newAmount: last.amount, date: last.date)
+        }
+    }
+
+    public static let streamingMerchants: Set<String> = [
+        "Netflix", "Disney+", "Crave", "Spotify", "YouTube Premium", "Apple Services", "Amazon Prime",
+        "Audible", "Paramount+", "Prime Video"
+    ]
 
     public static func monthly(_ facts: [TxnFact], months: Int, endingAt end: Date = Date()) -> [MonthTotal] {
         let last = DateParsing.startOfMonth(end)
@@ -256,6 +349,14 @@ public enum SpendingAnalytics {
             let annual = subs.reduce(0) { $0 + $1.annualCost }
             out.append("You have \(subs.count) recurring charge\(subs.count == 1 ? "" : "s") costing about \(money(annual)) a year.")
         }
+        for p in priceChanges(facts, now: now).prefix(2) {
+            out.append("\(p.merchant) went up from \(money(p.oldAmount)) to \(money(p.newAmount)).")
+        }
+        let streaming = subs.filter { streamingMerchants.contains($0.merchant) && $0.cadence == .monthly }
+        if streaming.count >= 2 {
+            let monthlyCost = streaming.reduce(0) { $0 + $1.typicalAmount }
+            out.append("You pay for \(streaming.count) streaming services (\(money(monthlyCost))/month): \(streaming.map(\.merchant).joined(separator: ", ")).")
+        }
         if let a = anomalies(facts, in: thisMonth).first {
             out.append("Unusual: \(a.fact.merchant) \(money(a.fact.amount)) — \(a.reason).")
         }
@@ -276,8 +377,13 @@ public enum SpendingAnalytics {
         lines.append("Income: \(money(totalIncome(thisMonth)))")
         let history = monthly(facts, months: 6, endingAt: month)
         lines.append("Spending by month: " + history.map { "\(monthLabel($0.month)) \(money($0.spend))" }.joined(separator: "; "))
-        lines.append("By category this month: " + byCategory(thisMonth).prefix(8)
-            .map { "\($0.category.displayName) \(money($0.total)) (\($0.count) txns)" }.joined(separator: "; "))
+        lines.append("By category this month: " + byCategoryKey(thisMonth).prefix(8)
+            .map { "\($0.name) \(money($0.total)) (\($0.count) txns)" }.joined(separator: "; "))
+        let accounts = byAccount(thisMonth)
+        if accounts.count > 1 {
+            lines.append("By account this month: " + accounts.prefix(5)
+                .map { a in "\(a.account)\(a.kind.map { k in " (\(k))" } ?? "") \(money(a.spend))" }.joined(separator: "; "))
+        }
         lines.append("Top merchants this month: " + topMerchants(thisMonth, limit: 6)
             .map { "\($0.merchant) \(money($0.total)) x\($0.count)" }.joined(separator: "; "))
         let changes = categoryChanges(facts, month: month).prefix(4)

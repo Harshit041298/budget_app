@@ -7,6 +7,8 @@ import BillCore
 struct CategoryReviewView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \LedgerEntry.date, order: .reverse) private var entries: [LedgerEntry]
+    @Query private var customs: [CustomCategory]
+    @State private var creatingFor: String?
     @State private var suggestions: [String: SpendCategory] = [:]
     @State private var suggesting = false
 
@@ -19,7 +21,7 @@ struct CategoryReviewView: View {
     }
 
     private var groups: [MerchantGroup] {
-        let other = entries.filter { $0.category == .other && !$0.isCredit }
+        let other = entries.filter { $0.categoryKey == SpendCategory.other.rawValue && !$0.isCredit }
         return Dictionary(grouping: other, by: \.merchant).map { merchant, list in
             MerchantGroup(merchant: merchant, total: list.reduce(0) { $0 + $1.amount }, count: list.count,
                   sample: list.first?.rawDescription ?? "")
@@ -80,8 +82,9 @@ struct CategoryReviewView: View {
                                     .tint(s.color)
                                 }
                                 Menu {
-                                    ForEach(SpendCategory.allCases.filter { $0 != .other }) { c in
-                                        Button { assign(c, g.merchant) } label: { Label(c.displayName, systemImage: c.symbol) }
+                                    Button { creatingFor = g.merchant } label: { Label("New category…", systemImage: "plus") }
+                                    ForEach(CategoryCatalog(customs).all.filter { $0.key != SpendCategory.other.rawValue }) { c in
+                                        Button { assign(c, g.merchant) } label: { Label(c.name, systemImage: c.symbol) }
                                     }
                                 } label: {
                                     Label(suggestions[g.merchant] == nil ? "Choose category" : "Other…", systemImage: "tag")
@@ -96,11 +99,21 @@ struct CategoryReviewView: View {
             }
         }
         .navigationTitle("Review categories")
+        .sheet(item: Binding(get: { creatingFor.map { MerchantRef(name: $0) } },
+                             set: { creatingFor = $0?.name })) { ref in
+            CategoryEditor(existing: nil) { info in assign(info, ref.name) }
+        }
     }
 
+    struct MerchantRef: Identifiable { let name: String; var id: String { name } }
+
     private func assign(_ category: SpendCategory, _ merchant: String) {
+        assign(.builtin(category), merchant)
+    }
+
+    private func assign(_ info: CategoryInfo, _ merchant: String) {
         withAnimation {
-            CategoryLearning.assign(category, toMerchant: merchant, context: context)
+            CategoryLearning.assign(info, toMerchant: merchant, context: context)
             suggestions[merchant] = nil
         }
     }

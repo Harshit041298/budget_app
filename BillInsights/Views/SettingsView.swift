@@ -31,6 +31,9 @@ struct SettingsView: View {
                 Section("Planning") {
                     NavigationLink { BudgetsView() } label: { Label("Budgets", systemImage: "gauge.with.dots.needle.50percent") }
                     NavigationLink { CategoryReviewView() } label: { Label("Review uncategorised", systemImage: "tag") }
+                    NavigationLink { CategoriesView() } label: { Label("Categories", systemImage: "square.grid.2x2") }
+                    NavigationLink { AccountsView() } label: { Label("Accounts & cards", systemImage: "creditcard") }
+                    NavigationLink { RulesView() } label: { Label("Rules", systemImage: "wand.and.rays") }
                     Toggle(isOn: $billReminders) {
                         Label("Bill & subscription reminders", systemImage: "bell.badge")
                     }
@@ -89,6 +92,9 @@ struct SettingsView: View {
                     try? context.delete(model: ImportedDocument.self)
                     try? context.delete(model: MerchantRule.self)
                     try? context.delete(model: CategoryBudget.self)
+                    try? context.delete(model: CustomCategory.self)
+                    try? context.delete(model: Account.self)
+                    try? context.delete(model: TransactionRule.self)
                     try? context.save()
                 }
             }
@@ -97,9 +103,10 @@ struct SettingsView: View {
 
     private func makeExport() -> URL? {
         func esc(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
+        let catalog = CategoryCatalog.load(context)
         var csv = "Date,Merchant,Category,Amount,Direction,Account,Source,Items,Original description\n"
         for e in entries.sorted(by: { $0.date < $1.date }) {
-            csv += [DateParsing.isoDay.string(from: e.date), esc(e.merchant), e.category.displayName,
+            csv += [DateParsing.isoDay.string(from: e.date), esc(e.merchant), esc(catalog.info(for: e).name),
                     String(format: "%.2f", e.amount), e.isCredit ? "in" : "out", esc(e.account ?? ""),
                     e.source.displayName, esc(e.items.joined(separator: "; ")), esc(e.rawDescription)]
                 .joined(separator: ",") + "\n"
@@ -116,6 +123,7 @@ struct SettingsView: View {
 
 struct DocumentDetailView: View {
     let document: ImportedDocument
+    @Query private var customs: [CustomCategory]
 
     var body: some View {
         List {
@@ -129,7 +137,9 @@ struct DocumentDetailView: View {
             }
             Section("Transactions") {
                 ForEach(document.entries.sorted { $0.date < $1.date }) { e in
-                    NavigationLink { EntryDetailView(entry: e) } label: { EntryRow(entry: e) }
+                    NavigationLink { EntryDetailView(entry: e) } label: {
+                        EntryRow(entry: e, info: CategoryCatalog(customs).info(for: e))
+                    }
                 }
             }
             Section("Extracted text") {

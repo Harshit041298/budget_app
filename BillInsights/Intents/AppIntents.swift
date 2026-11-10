@@ -33,23 +33,26 @@ struct LogPurchaseIntent: AppIntent {
         guard !name.isEmpty else { throw IntentFailure(message: "The merchant name is missing.") }
 
         let context = AppData.container.mainContext
-        let rules = (try? context.fetch(FetchDescriptor<MerchantRule>())) ?? []
-        let labeled = (try? context.fetch(FetchDescriptor<LedgerEntry>(predicate: #Predicate<LedgerEntry> { $0.userSetCategory == true }))) ?? []
-        let categorizer = Categorizer(rules: rules, labeled: labeled.map { ($0.merchant, $0.category) })
+        let categorizer = Categorizer.load(context)
         let clean = MerchantNormalizer.normalize(name)
-        let category = categorizer.categorize(merchant: clean, rawDescription: name, hint: nil).category
+        let result = categorizer.categorize(merchant: clean, rawDescription: name, hint: nil)
+        let catalog = CategoryCatalog.load(context)
 
         let parsed = ParsedTransaction(date: Date(), rawDescription: name, amount: Decimal(value).rounded2,
                                        isCredit: false, account: card?.isEmpty == false ? card : nil,
                                        externalID: "applepay:\(UUID().uuidString)")
-        let entry = LedgerEntry(parsed: parsed, merchant: clean, category: category, source: .applePay)
+        let entry = LedgerEntry(parsed: parsed, merchant: clean, category: result.category, source: .applePay)
+        entry.customCategoryKey = result.customKey
         context.insert(entry)
+        CategoryLearning.applyRules(to: [entry], context: context)
+        ImportService.ensureAccounts(for: [entry], context: context)
         try context.save()
+        let categoryName = catalog.info(for: entry).name
         await Alerts.checkBudgets(context: context)
 
         let facts = AppData.facts(context: context)
         let monthTotal = SpendingAnalytics.totalSpend(SpendingAnalytics.inMonth(facts, Date()))
-        return .result(dialog: "Logged \(SpendingAnalytics.money(value)) at \(clean) (\(category.displayName)). \(SpendingAnalytics.money(monthTotal)) spent this month.")
+        return .result(dialog: "Logged \(SpendingAnalytics.money(value)) at \(clean) (\(categoryName)). \(SpendingAnalytics.money(monthTotal)) spent this month.")
     }
 }
 
@@ -68,8 +71,8 @@ struct MonthSpendingIntent: AppIntent {
         let spent = SpendingAnalytics.totalSpend(month)
         guard spent > 0 else { return .result(dialog: "No spending recorded yet this month.") }
         var text = "You've spent \(SpendingAnalytics.money(spent)) this month."
-        if let top = SpendingAnalytics.byCategory(month).first {
-            text += " Most of it on \(top.category.displayName.lowercased()), \(SpendingAnalytics.money(top.total))."
+        if let top = SpendingAnalytics.byCategoryKey(month).first {
+            text += " Most of it on \(top.name.lowercased()), \(SpendingAnalytics.money(top.total))."
         }
         if let f = SpendingAnalytics.forecast(facts, month: now, now: now) {
             text += " You're on pace for about \(SpendingAnalytics.money(f))."

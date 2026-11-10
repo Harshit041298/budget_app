@@ -6,15 +6,15 @@ struct BudgetsView: View {
     @Environment(\.modelContext) private var context
     @Query private var budgets: [CategoryBudget]
     @Query private var entries: [LedgerEntry]
+    @Query private var customs: [CustomCategory]
+    @Query private var accounts: [Account]
     @AppStorage("countAmazonOrders") private var countAmazon = false
     @AppStorage("budgetAlertsEnabled") private var alertsEnabled = true
 
-    private var categories: [SpendCategory] {
-        SpendCategory.allCases.filter { $0.isSpending }
-    }
-
     var body: some View {
-        let facts = entries.map { $0.fact(countAmazonOrders: countAmazon) }
+        let catalog = CategoryCatalog(customs)
+        let categories = catalog.all.filter { $0.base.isSpending }
+        let facts = entries.map { $0.fact(countAmazonOrders: countAmazon, catalog: catalog, accounts: AppData.accountMap(accounts)) }
         let now = Date()
         List {
             Section {
@@ -27,10 +27,10 @@ struct BudgetsView: View {
             }
             Section("Monthly limits · \(now.monthYear)") {
                 ForEach(categories) { c in
-                    BudgetRow(category: c,
-                              budget: budgets.first { $0.category == c },
-                              spent: SpendingAnalytics.spend(in: c, facts, month: now)) { newLimit in
-                        setLimit(newLimit, for: c)
+                    BudgetRow(info: c,
+                              budget: budgets.first { $0.categoryRaw == c.key },
+                              spent: SpendingAnalytics.spend(forKey: c.key, facts, month: now)) { newLimit in
+                        setLimit(newLimit, forKey: c.key)
                     }
                 }
             }
@@ -38,11 +38,13 @@ struct BudgetsView: View {
         .navigationTitle("Budgets")
     }
 
-    private func setLimit(_ limit: Double?, for category: SpendCategory) {
-        let existing = budgets.first { $0.category == category }
+    private func setLimit(_ limit: Double?, forKey key: String) {
+        let existing = budgets.first { $0.categoryRaw == key }
         if let limit, limit > 0 {
             if let existing { existing.monthlyLimit = limit } else {
-                context.insert(CategoryBudget(category: category, monthlyLimit: limit))
+                let b = CategoryBudget(category: .other, monthlyLimit: limit)
+                b.categoryRaw = key
+                context.insert(b)
             }
             if alertsEnabled { Task { await Alerts.requestPermission() } }
         } else if let existing {
@@ -54,7 +56,7 @@ struct BudgetsView: View {
 }
 
 private struct BudgetRow: View {
-    let category: SpendCategory
+    let info: CategoryInfo
     let budget: CategoryBudget?
     let spent: Double
     let onChange: (Double?) -> Void
@@ -64,8 +66,8 @@ private struct BudgetRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                CategoryIcon(category: category, size: 28)
-                Text(category.displayName)
+                CategoryIcon(info: info, size: 28)
+                Text(info.name)
                 Spacer()
                 TextField("No limit", value: $value, format: .number.precision(.fractionLength(0)))
                     .keyboardType(.numberPad)

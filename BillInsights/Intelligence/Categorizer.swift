@@ -1,5 +1,6 @@
 import Foundation
 import NaturalLanguage
+import SwiftData
 import BillCore
 
 /// Multi-stage, fully on-device categoriser:
@@ -16,11 +17,12 @@ final class Categorizer {
     struct Result {
         var category: SpendCategory
         var source: Source
+        var customKey: String? = nil
         var isConfident: Bool { source != .semantic && source != .fallback }
     }
 
-    private let userRules: [String: SpendCategory]
-    private var examples: [(vector: [Double], category: SpendCategory)] = []
+    private let userRules: [String: (base: SpendCategory, custom: String?)]
+    private var examples: [(vector: [Double], category: SpendCategory, custom: String?)] = []
     private static let embedding: NLEmbedding? = NLEmbedding.sentenceEmbedding(for: .english)
     private static let prototypes: [(vector: [Double], category: SpendCategory)] = {
         guard let e = embedding else { return [] }
@@ -32,21 +34,40 @@ final class Categorizer {
     /// - Parameters:
     ///   - rules: merchant rules the user created by editing categories.
     ///   - labeled: (merchant, category) examples from user-categorised entries.
-    init(rules: [MerchantRule], labeled: [(String, SpendCategory)]) {
-        var map: [String: SpendCategory] = [:]
-        for r in rules { map[r.merchantKey] = r.category }
+    /// - Parameters:
+    ///   - catalog: resolves custom category keys used in rules / examples.
+    init(rules: [MerchantRule], labeled: [(String, String)], catalog: CategoryCatalog) {
+        func resolve(_ key: String) -> (base: SpendCategory, custom: String?)? {
+            if let c = catalog.custom(key: key) { return (c.base, c.key) }
+            if let b = SpendCategory(rawValue: key) { return (b, nil) }
+            return nil   // a deleted custom category
+        }
+        var map: [String: (base: SpendCategory, custom: String?)] = [:]
+        for r in rules { if let v = resolve(r.categoryRaw) { map[r.merchantKey] = v } }
         userRules = map
         if let e = Self.embedding {
             var seen = Set<String>()
-            for (merchant, cat) in labeled where seen.insert(merchant).inserted {
-                if let v = e.vector(for: merchant) { examples.append((vector: v, category: cat)) }
+            for (merchant, key) in labeled where seen.insert(merchant).inserted {
+                if let v = e.vector(for: merchant), let cat = resolve(key) {
+                    examples.append((vector: v, category: cat.base, custom: cat.custom))
+                }
                 if examples.count > 400 { break }
             }
         }
     }
 
+    @MainActor
+    static func load(_ context: ModelContext) -> Categorizer {
+        let rules = (try? context.fetch(FetchDescriptor<MerchantRule>())) ?? []
+        let labeled = (try? context.fetch(FetchDescriptor<LedgerEntry>(predicate: #Predicate<LedgerEntry> { $0.userSetCategory == true }))) ?? []
+        return Categorizer(rules: rules, labeled: labeled.map { ($0.merchant, $0.categoryKey) },
+                           catalog: CategoryCatalog.load(context))
+    }
+
     func categorize(merchant: String, rawDescription: String, hint: SpendCategory?) -> Result {
-        if let c = userRules[MerchantNormalizer.key(for: merchant)] { return Result(category: c, source: .user) }
+        if let c = userRules[MerchantNormalizer.key(for: merchant)] {
+            return Result(category: c.base, source: .user, customKey: c.custom)
+        }
         if let c = RuleCategorizer.categorize(rawDescription: rawDescription), c == .transfer || c == .income || c == .fees {
             return Result(category: c, source: .rule)
         }
@@ -56,8 +77,8 @@ final class Categorizer {
         guard let e = Self.embedding, let v = e.vector(for: merchant + " " + rawDescription.lowercased()) else {
             return Result(category: .other, source: .fallback)
         }
-        if let best = examples.map({ ($0.category, cosine(v, $0.vector)) }).max(by: { $0.1 < $1.1 }), best.1 > 0.9 {
-            return Result(category: best.0, source: .learned)
+        if let best = examples.map({ ($0, cosine(v, $0.vector)) }).max(by: { $0.1 < $1.1 }), best.1 > 0.9 {
+            return Result(category: best.0.category, source: .learned, customKey: best.0.custom)
         }
         if let best = Self.prototypes.map({ ($0.category, cosine(v, $0.vector)) }).max(by: { $0.1 < $1.1 }), best.1 > 0.3 {
             return Result(category: best.0, source: .semantic)

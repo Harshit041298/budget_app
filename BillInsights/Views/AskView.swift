@@ -5,6 +5,7 @@ import BillCore
 struct AskView: View {
     @Query(sort: \LedgerEntry.date, order: .reverse) private var entries: [LedgerEntry]
     @AppStorage("countAmazonOrders") private var countAmazon = false
+    @Environment(\.modelContext) private var context
     @State private var messages: [ChatMessage] = []
     @State private var input = ""
     @State private var thinking = false
@@ -16,7 +17,8 @@ struct AskView: View {
         "What are my subscriptions costing me?",
         "What did I buy on Amazon recently?",
         "Where can I cut back?",
-        "What was my biggest purchase this month?"
+        "What was my biggest purchase this month?",
+        "How much did I spend on my credit cards vs debit?"
     ]
 
     var body: some View {
@@ -97,7 +99,7 @@ struct AskView: View {
         input = ""
         messages.append(ChatMessage(text: q, fromUser: true))
         if assistant == nil || assistantDataCount != entries.count {
-            assistant = FinanceAssistant(facts: entries.map { $0.fact(countAmazonOrders: countAmazon) })
+            assistant = FinanceAssistant(facts: AppData.facts(context: context))
             assistantDataCount = entries.count
         }
         thinking = true
