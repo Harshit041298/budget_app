@@ -30,6 +30,7 @@ public enum AskContextBuilder {
     }
 
     public static func period(for question: String, now: Date = Date()) -> Period {
+        if let p = AskEngine.explicitPeriod(question, now: now) { return p }
         let q = question.lowercased()
         let thisMonth = DateParsing.startOfMonth(now)
         let cal = DateParsing.calendar

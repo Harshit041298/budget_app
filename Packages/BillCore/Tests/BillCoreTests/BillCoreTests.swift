@@ -336,3 +336,52 @@ final class AskContextTests: XCTestCase {
         XCTAssertEqual(AskContextBuilder.period(for: "spending in august", now: day(10, 10)).label, SpendingAnalytics.monthLabel(day(8, 1)))
     }
 }
+
+final class AskEngineTests: XCTestCase {
+    func day(_ m: Int, _ d: Int) -> Date { DateParsing.make(year: 2026, month: m, day: d)! }
+
+    var facts: [TxnFact] {
+        [
+            TxnFact(date: day(9, 12), merchant: "Amazon", amount: 42.98, isCredit: false, category: .shopping),
+            TxnFact(date: day(10, 2), merchant: "Amazon", amount: 84.17, isCredit: false, category: .shopping),
+            TxnFact(date: day(10, 4), merchant: "Instacart", amount: 760.33, isCredit: false, category: .groceries),
+            TxnFact(date: day(10, 8), merchant: "Walmart", amount: 127.87, isCredit: false, category: .shopping),
+            TxnFact(date: day(10, 1), merchant: "Amazon", amount: 84.17, isCredit: false, category: .shopping,
+                    countsAsSpending: false, items: ["USB cable"])
+        ]
+    }
+
+    func testAmazonLastMonthIsExact() {
+        let now = day(11, 10)
+        let q = AskEngine.parse("how much I spent on amazon last month", facts: facts, previous: nil, now: now)
+        XCTAssertEqual(q.merchants, ["Amazon"])
+        XCTAssertEqual(q.intent, .total)
+        let a = AskEngine.answer(q, facts: facts, now: now)!
+        XCTAssertTrue(a.contains("$84.17"), a)
+        XCTAssertTrue(a.contains("aren't counted"), a)
+        XCTAssertFalse(a.contains("760"), a)
+    }
+
+    func testFollowUpInheritsSubject() {
+        let now = day(11, 10)
+        let first = AskEngine.parse("how much did I spend at amazon last month", facts: facts, previous: nil, now: now)
+        let follow = AskEngine.parse("In sep?", facts: facts, previous: first, now: now)
+        XCTAssertEqual(follow.merchants, ["Amazon"])
+        XCTAssertEqual(follow.period.label, SpendingAnalytics.monthLabel(day(9, 1)))
+        XCTAssertTrue(AskEngine.answer(follow, facts: facts, now: now)!.contains("$42.98"))
+    }
+
+    func testShoppingWhereMost() {
+        let now = day(10, 20)
+        let q = AskEngine.parse("Where am I spending the most in shopping?", facts: facts, previous: nil, now: now)
+        XCTAssertEqual(q.intent, .top)
+        let a = AskEngine.answer(q, facts: facts, now: now)!
+        XCTAssertTrue(a.contains("Walmart"), a)
+        XCTAssertFalse(a.contains("Instacart"), a)
+    }
+
+    func testAdviceGoesToAI() {
+        let q = AskEngine.parse("How can I save $1,500 a month?", facts: facts, previous: nil, now: day(10, 20))
+        XCTAssertNil(AskEngine.answer(q, facts: facts, now: day(10, 20)))
+    }
+}
