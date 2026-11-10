@@ -107,3 +107,17 @@ final class MerchantRule {
 
     var category: SpendCategory { SpendCategory(rawValue: categoryRaw) ?? .other }
 }
+
+/// A monthly spending limit for one category.
+@Model
+final class CategoryBudget {
+    @Attribute(.unique) var categoryRaw: String
+    var monthlyLimit: Double
+
+    init(category: SpendCategory, monthlyLimit: Double) {
+        categoryRaw = category.rawValue
+        self.monthlyLimit = monthlyLimit
+    }
+
+    var category: SpendCategory { SpendCategory(rawValue: categoryRaw) ?? .other }
+}

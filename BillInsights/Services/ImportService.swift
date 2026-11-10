@@ -10,6 +10,7 @@ struct ImportSummary: Identifiable {
     var added: Int
     var duplicates: Int
     var linkedOrders: Int
+    var mergedApplePay: Int = 0
     var usedAI: Bool
     var warnings: [String]
 }
@@ -159,10 +160,13 @@ final class ImportService {
         }
 
         let linked = linkAmazonOrders(context: context)
+        let merged = mergeApplePay(into: added, kind: result.kind, context: context)
         try context.save()
+        await Alerts.checkBudgets(context: context)
+        await Alerts.rescheduleBillReminders(context: context)
 
         return ImportSummary(filename: filename, kind: result.kind, added: added.count, duplicates: duplicates,
-                             linkedOrders: linked, usedAI: usedAI, warnings: result.warnings)
+                             linkedOrders: linked, mergedApplePay: merged, usedAI: usedAI, warnings: result.warnings)
     }
 
     private func looksMultiLine(_ text: String) -> Bool {
@@ -170,6 +174,32 @@ final class ImportService {
             $0.range(of: AmountParsing.pattern, options: .regularExpression) != nil
         }
         return (amountLines.count >= 6 && DocumentRouter.looksLikeStatement(text)) || amountLines.count >= 15
+    }
+
+    /// Purchases logged live from Apple Pay reappear on the statement. Keep
+    /// the statement version (exact final amount, incl. tips) and carry over
+    /// anything the user set on the live entry.
+    private func mergeApplePay(into added: [LedgerEntry], kind: DocumentKind, context: ModelContext) -> Int {
+        guard [.cibcCSV, .genericCSV, .cibcCreditCardStatement, .cibcBankStatement, .aiExtracted].contains(kind) else { return 0 }
+        let live = ((try? context.fetch(FetchDescriptor<LedgerEntry>())) ?? []).filter { $0.source == .applePay }
+        guard !live.isEmpty else { return 0 }
+        let statement = added.filter { !$0.isCredit }
+        let matches = LiveMatcher.match(
+            live: live.map { .init(id: $0.id, date: $0.date, amount: $0.amount, merchant: $0.rawDescription) },
+            statement: statement.map { .init(id: $0.id, date: $0.date, amount: $0.amount, merchant: $0.rawDescription) })
+        let liveByID = Dictionary(uniqueKeysWithValues: live.map { ($0.id, $0) })
+        let stmtByID = Dictionary(uniqueKeysWithValues: statement.map { ($0.id, $0) })
+        for (liveID, stmtID) in matches {
+            guard let l = liveByID[liveID], let s = stmtByID[stmtID] else { continue }
+            if l.userSetCategory {
+                s.category = l.category
+                s.userSetCategory = true
+            }
+            if !l.notes.isEmpty { s.notes = l.notes }
+            if s.items.isEmpty && !l.items.isEmpty { s.items = l.items }
+            context.delete(l)
+        }
+        return matches.count
     }
 
     /// Attaches Amazon order items to the matching card charges.

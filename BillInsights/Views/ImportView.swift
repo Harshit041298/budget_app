@@ -26,18 +26,21 @@ struct ImportView: View {
                                      subtitle: "CIBC e-statements, CIBC CSV downloads, Amazon order history",
                                      systemImage: "folder.fill", color: .blue)
                     }
+                    .buttonStyle(.plain)
                     if VNDocumentCameraViewController.isSupported {
                         Button { showScanner = true } label: {
                             ImportOption(title: "Scan paper bill or receipt",
                                          subtitle: "Uses the camera + on-device text recognition",
                                          systemImage: "doc.viewfinder.fill", color: .orange)
                         }
+                        .buttonStyle(.plain)
                     }
                     PhotosPicker(selection: $photoItems, maxSelectionCount: 20, matching: .images) {
                         ImportOption(title: "Photos & screenshots",
                                      subtitle: "Screenshots of bills, e-receipts or order confirmations",
                                      systemImage: "photo.on.rectangle.angled", color: .green)
                     }
+                    .buttonStyle(.plain)
                 } header: {
                     Text("Add documents")
                 } footer: {
@@ -64,7 +67,8 @@ struct ImportView: View {
                                 }
                                 Text("\(s.kind.displayName) · \(s.added) added" +
                                      (s.duplicates > 0 ? " · \(s.duplicates) duplicates skipped" : "") +
-                                     (s.linkedOrders > 0 ? " · \(s.linkedOrders) Amazon orders matched" : ""))
+                                     (s.linkedOrders > 0 ? " · \(s.linkedOrders) Amazon orders matched" : "") +
+                                     (s.mergedApplePay > 0 ? " · \(s.mergedApplePay) Apple Pay purchases merged" : ""))
                                     .font(.caption).foregroundStyle(.secondary)
                                 ForEach(s.warnings, id: \.self) { w in
                                     Label(w, systemImage: "exclamationmark.triangle").font(.caption2).foregroundStyle(.orange)
@@ -72,6 +76,29 @@ struct ImportView: View {
                             }
                         }
                     }
+                }
+
+                Section {
+                    DisclosureGroup {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Log every Apple Pay tap automatically, the moment you pay:")
+                            Text("""
+                            1. Open the **Shortcuts** app → **Automation** → **+**.
+                            2. Choose **Transaction**, select your CIBC card(s), keep all categories, tap **Next**.
+                            3. Choose **Run Immediately**, then **New Blank Automation**.
+                            4. Add action → search **Log Purchase** (Bill Insights).
+                            5. Tap **Merchant** → choose the **Merchant** variable; tap **Amount** → **Amount**; tap **Card** → **Card or Pass**.
+                            6. Tap **Done**.
+                            """)
+                            Text("When you import that month's CIBC statement or CSV later, matching purchases are merged automatically, so nothing is counted twice. Only Apple Pay taps are caught — online and physical-card purchases come from the statement.")
+                                .foregroundStyle(.secondary)
+                        }
+                        .font(.footnote)
+                    } label: {
+                        Label("Apple Pay live logging", systemImage: "wave.3.right.circle.fill")
+                    }
+                } header: {
+                    Text("Automatic")
                 }
 
                 Section("Where to get your data") {

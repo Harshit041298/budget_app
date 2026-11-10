@@ -152,3 +152,41 @@ final class AnalyticsTests: XCTestCase {
         XCTAssertEqual(m[o], c)
     }
 }
+
+final class LiveMatcherTests: XCTestCase {
+    func day(_ m: Int, _ d: Int) -> Date { DateParsing.make(year: 2026, month: m, day: d)! }
+
+    func testExactAndTipMatches() {
+        let l1 = UUID(), l2 = UUID(), s1 = UUID(), s2 = UUID(), s3 = UUID()
+        let m = LiveMatcher.match(
+            live: [.init(id: l1, date: day(10, 3), amount: 4.50, merchant: "Tim Hortons"),
+                   .init(id: l2, date: day(10, 5), amount: 80.00, merchant: "The Keg")],
+            statement: [.init(id: s1, date: day(10, 4), amount: 4.50, merchant: "TIM HORTONS #2345 TORONTO ON"),
+                        .init(id: s2, date: day(10, 6), amount: 96.00, merchant: "THE KEG STEAKHOUSE TORONTO ON"),
+                        .init(id: s3, date: day(10, 6), amount: 96.00, merchant: "SHELL C123")])
+        XCTAssertEqual(m[l1], s1)
+        XCTAssertEqual(m[l2], s2)
+    }
+
+    func testNoMatchWhenFarApart() {
+        let l = UUID()
+        let m = LiveMatcher.match(live: [.init(id: l, date: day(10, 1), amount: 10, merchant: "A")],
+                                  statement: [.init(id: UUID(), date: day(10, 20), amount: 10, merchant: "A")])
+        XCTAssertNil(m[l])
+    }
+
+    func testParseAmount() {
+        XCTAssertEqual(LiveMatcher.parseAmount("CA$4.50"), 4.50)
+        XCTAssertEqual(LiveMatcher.parseAmount("$1,234.00"), 1234.00)
+        XCTAssertEqual(LiveMatcher.parseAmount("4,50 $"), 4.50)
+        XCTAssertNil(LiveMatcher.parseAmount("abc"))
+    }
+
+    func testForecastOnlyForCurrentMonth() {
+        let facts = [TxnFact(date: day(10, 2), merchant: "X", amount: 100, isCredit: false, category: .dining)]
+        XCTAssertNil(SpendingAnalytics.forecast(facts, month: day(9, 1), now: day(10, 10)))
+        let f = SpendingAnalytics.forecast(facts, month: day(10, 1), now: day(10, 10))
+        XCTAssertNotNil(f)
+        XCTAssertGreaterThan(f!, 100)
+    }
+}

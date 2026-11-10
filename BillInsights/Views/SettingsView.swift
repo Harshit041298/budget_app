@@ -9,6 +9,7 @@ struct SettingsView: View {
     @Query private var rules: [MerchantRule]
     @AppStorage("countAmazonOrders") private var countAmazon = false
     @AppStorage("appLockEnabled") private var lockEnabled = false
+    @AppStorage("billRemindersEnabled") private var billReminders = false
     @State private var exportURL: URL?
     @State private var confirmDelete = false
 
@@ -25,6 +26,20 @@ struct SettingsView: View {
                     LabeledContent("Text recognition", value: "Apple Vision (on-device)")
                     LabeledContent("Categoriser", value: "Rules + NL embeddings")
                     LabeledContent("Learned merchant rules", value: "\(rules.count)")
+                }
+
+                Section("Planning") {
+                    NavigationLink { BudgetsView() } label: { Label("Budgets", systemImage: "gauge.with.dots.needle.50percent") }
+                    NavigationLink { CategoryReviewView() } label: { Label("Review uncategorised", systemImage: "tag") }
+                    Toggle(isOn: $billReminders) {
+                        Label("Bill & subscription reminders", systemImage: "bell.badge")
+                    }
+                    .onChange(of: billReminders) { _, on in
+                        Task {
+                            if on { await Alerts.requestPermission() }
+                            await Alerts.rescheduleBillReminders(context: context)
+                        }
+                    }
                 }
 
                 Section {
@@ -73,6 +88,7 @@ struct SettingsView: View {
                     try? context.delete(model: LedgerEntry.self)
                     try? context.delete(model: ImportedDocument.self)
                     try? context.delete(model: MerchantRule.self)
+                    try? context.delete(model: CategoryBudget.self)
                     try? context.save()
                 }
             }

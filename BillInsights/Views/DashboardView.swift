@@ -5,6 +5,7 @@ import BillCore
 
 struct DashboardView: View {
     @Query(sort: \LedgerEntry.date, order: .reverse) private var entries: [LedgerEntry]
+    @Query private var budgets: [CategoryBudget]
     @AppStorage("countAmazonOrders") private var countAmazon = false
     @State private var month: Date = DateParsing.startOfMonth(Date())
     @State private var didPickInitialMonth = false
@@ -50,6 +51,9 @@ struct DashboardView: View {
         let unusual = SpendingAnalytics.anomalies(facts, in: monthFacts)
         let merchants = SpendingAnalytics.topMerchants(monthFacts, limit: 6)
         let products = monthFacts.filter { !$0.items.isEmpty && !$0.isCredit }
+        let forecast = SpendingAnalytics.forecast(facts, month: month)
+        let otherTotal = categories.first { $0.category == .other }?.total ?? 0
+        let otherMerchants = Set(facts.filter { $0.category == .other && !$0.isCredit }.map(\.merchant)).count
 
         ScrollView {
             VStack(spacing: 16) {
@@ -70,7 +74,57 @@ struct DashboardView: View {
                             Text("Income \(money(income)) · Net \(money(income - spend))")
                                 .font(.subheadline).foregroundStyle(.secondary)
                         }
+                        if let forecast {
+                            Label("On pace for about \(money(forecast)) by month-end", systemImage: "chart.line.uptrend.xyaxis")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }
                     }
+                }
+
+                if otherMerchants > 0 && (spend == 0 || otherTotal / max(spend, 1) > 0.05 || otherMerchants >= 5) {
+                    NavigationLink {
+                        CategoryReviewView()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "tag.fill")
+                                .foregroundStyle(.white)
+                                .frame(width: 36, height: 36)
+                                .background(Color.orange.gradient, in: RoundedRectangle(cornerRadius: 10))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Review \(otherMerchants) uncategorised merchant\(otherMerchants == 1 ? "" : "s")").bold()
+                                Text("Sort them once and future imports are categorised automatically.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                        }
+                        .padding()
+                        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if !budgets.isEmpty {
+                    Card(title: "Budgets", systemImage: "gauge.with.dots.needle.50percent") {
+                        ForEach(budgets.sorted { $0.category.displayName < $1.category.displayName }) { b in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    CategoryIcon(category: b.category, size: 24)
+                                    Text(b.category.displayName).font(.subheadline)
+                                }
+                                BudgetBar(spent: SpendingAnalytics.spend(in: b.category, facts, month: month), limit: b.monthlyLimit)
+                            }
+                        }
+                        NavigationLink("Edit budgets") { BudgetsView() }.font(.subheadline)
+                    }
+                } else {
+                    NavigationLink {
+                        BudgetsView()
+                    } label: {
+                        Label("Set monthly budgets", systemImage: "gauge.with.dots.needle.50percent")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
                 }
 
                 if !categories.isEmpty {
@@ -183,6 +237,7 @@ struct DashboardView: View {
                 }
             }
             .padding()
+            .padding(.bottom, 60)
         }
     }
 

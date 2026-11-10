@@ -1,17 +1,22 @@
 import SwiftUI
 import SwiftData
 import LocalAuthentication
+import UserNotifications
 
 @main
 struct BillInsightsApp: App {
     @State private var importer = ImportService()
+
+    init() {
+        UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
+    }
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(importer)
         }
-        .modelContainer(for: [LedgerEntry.self, ImportedDocument.self, MerchantRule.self])
+        .modelContainer(AppData.container)
     }
 }
 
@@ -40,6 +45,12 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { unlocked = false }
             if phase == .active && lockEnabled && !unlocked { authenticate() }
+            if phase == .active {
+                Task {
+                    await Alerts.rescheduleBillReminders(context: context)
+                    await Alerts.checkBudgets(context: context)
+                }
+            }
         }
         .onOpenURL { url in
             // "Open in Bill Insights" / Share from Files, Mail or the CIBC app.

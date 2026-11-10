@@ -93,6 +93,7 @@ public enum DocumentKind: String, Codable, Sendable, CaseIterable {
     case receipt
     case aiExtracted
     case manual
+    case applePay
 
     public var displayName: String {
         switch self {
@@ -104,6 +105,7 @@ public enum DocumentKind: String, Codable, Sendable, CaseIterable {
         case .receipt: return "Receipt / bill"
         case .aiExtracted: return "Statement (read by on-device AI)"
         case .manual: return "Manual entry"
+        case .applePay: return "Apple Pay (logged live)"
         }
     }
 }

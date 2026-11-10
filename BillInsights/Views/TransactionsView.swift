@@ -179,24 +179,7 @@ struct EntryDetailView: View {
     }
 
     private func setCategory(_ c: SpendCategory) {
-        entry.category = c
-        entry.userSetCategory = true
-        let key = MerchantNormalizer.key(for: entry.merchant)
-        let existing = try? context.fetch(FetchDescriptor<MerchantRule>(predicate: #Predicate<MerchantRule> { $0.merchantKey == key }))
-        if let rule = existing?.first {
-            rule.categoryRaw = c.rawValue
-            rule.updatedAt = Date()
-        } else {
-            context.insert(MerchantRule(merchant: entry.merchant, category: c))
-        }
-        if applyToAll {
-            let merchant = entry.merchant
-            let same = (try? context.fetch(FetchDescriptor<LedgerEntry>(predicate: #Predicate<LedgerEntry> { $0.merchant == merchant }))) ?? []
-            for e in same where !e.userSetCategory || e.id == entry.id {
-                e.category = c
-            }
-        }
-        try? context.save()
+        CategoryLearning.assign(c, toMerchant: entry.merchant, context: context, applyToAll: applyToAll, entry: entry)
     }
 }
 

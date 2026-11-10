@@ -301,6 +301,29 @@ public enum SpendingAnalytics {
         return lines.joined(separator: "\n")
     }
 
+    /// Projects month-end spending from the pace so far. Only meaningful for
+    /// the current month; returns nil for past months or too little data.
+    public static func forecast(_ facts: [TxnFact], month: Date, now: Date = Date()) -> Double? {
+        let start = DateParsing.startOfMonth(month)
+        guard DateParsing.startOfMonth(now) == start else { return nil }
+        let cal = DateParsing.calendar
+        let day = cal.component(.day, from: now)
+        guard day >= 5, let days = cal.range(of: .day, in: .month, for: start)?.count else { return nil }
+        let soFar = totalSpend(inMonth(facts, month))
+        guard soFar > 0 else { return nil }
+        // Recurring charges still to come this month are added at full value
+        // rather than extrapolated.
+        let upcoming = recurring(facts, now: now)
+            .filter { $0.cadence == .monthly && $0.nextExpected > now && DateParsing.startOfMonth($0.nextExpected) == start }
+            .reduce(0) { $0 + $1.typicalAmount }
+        return soFar / Double(day) * Double(days) * 0.85 + soFar * 0.15 + upcoming
+    }
+
+    /// Spend per category for a month (for budgets).
+    public static func spend(in category: SpendCategory, _ facts: [TxnFact], month: Date) -> Double {
+        totalSpend(inMonth(facts, month).filter { $0.category == category })
+    }
+
     public static func monthLabel(_ date: Date) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_CA")
