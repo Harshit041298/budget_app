@@ -40,7 +40,7 @@ jobs:
           mkdir -p ~/private_keys
           printf '%s\n' "$ASC_KEY_P8" > ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
 
-      - name: Archive (cloud-managed signing)
+      - name: Archive (unsigned; signed during export)
         if: steps.check.outputs.ready == 'true'
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -51,14 +51,12 @@ jobs:
           xcodebuild -project BillInsights.xcodeproj -scheme BillInsights \
             -configuration Release -destination 'generic/platform=iOS' \
             -archivePath build/BillInsights.xcarchive \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath ~/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
-            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_STYLE=Automatic \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             archive | tail -40
 
-      - name: Upload to App Store Connect
+      - name: Sign with cloud-managed distribution certificate and upload
         if: steps.check.outputs.ready == 'true'
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
