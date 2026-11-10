@@ -26,6 +26,9 @@ struct LogPurchaseIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        if amount.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw IntentFailure(message: "No amount was received. If you pressed ▶ to test the automation, that's expected — Wallet only provides the amount on a real card tap.")
+        }
         guard let value = LiveMatcher.parseAmount(amount), value > 0 else {
             throw IntentFailure(message: "Couldn't read the amount “\(amount)”.")
         }
