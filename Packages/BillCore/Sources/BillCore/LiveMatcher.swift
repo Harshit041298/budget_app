@@ -47,14 +47,25 @@ public enum LiveMatcher {
         return ka.hasPrefix(kb.prefix(n)) || kb.hasPrefix(ka.prefix(n))
     }
 
-    /// Extracts a number from Shortcuts' amount text, e.g. "CA$4.50", "$1,234.00", "4,50 $".
+    /// Extracts the money amount from Shortcuts' text. Works for a bare amount
+    /// ("CA$4.50", "$1,234.00", "4,50 $", "4.5") and for a whole transaction
+    /// description ("Tim Hortons, $4.50, CIBC Visa") by preferring numbers that
+    /// look like money (currency symbol or two decimals) over other digits.
     public static func parseAmount(_ raw: String) -> Double? {
         var s = raw.replacingOccurrences(of: "\u{00A0}", with: " ")
         // "4,50" (comma decimal) → "4.50" when there is no dot.
         if !s.contains("."), let m = firstMatch(#"(\d+),(\d{2})\b"#, in: s) {
             s = s.replacingOccurrences(of: m[0], with: "\(m[1]).\(m[2])")
         }
-        guard let m = firstMatch(#"\d[\d,]*(?:\.\d+)?"#, in: s) else { return nil }
-        return Double(m[0].replacingOccurrences(of: ",", with: ""))
+        func num(_ t: String) -> Double? { Double(t.replacingOccurrences(of: ",", with: "")) }
+        // 1. Next to a currency symbol/code: $4.50, CA$ 4.50, 4.50 $, CAD 4.50
+        if let m = firstMatch(#"(?:[$€£]|CAD|USD)\s?(\d[\d,]*(?:\.\d{1,2})?)"#, in: s), let v = num(m[1]) { return v }
+        if let m = firstMatch(#"(\d[\d,]*(?:\.\d{1,2})?)\s?(?:[$€£]|CAD|USD)"#, in: s), let v = num(m[1]) { return v }
+        // 2. A number with exactly two decimals.
+        if let m = firstMatch(#"\d[\d,]*\.\d{2}\b"#, in: s), let v = num(m[0]) { return v }
+        // 3. A bare number (only when the text is basically just a number).
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let m = firstMatch(#"^\d[\d,]*(?:\.\d+)?$"#, in: trimmed), let v = num(m[0]) { return v }
+        return nil
     }
 }

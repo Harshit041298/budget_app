@@ -263,3 +263,13 @@ final class CalendarTests: XCTestCase {
         XCTAssertNil(t[4])
     }
 }
+
+final class ParseAmountTests: XCTestCase {
+    func testWholeTransactionText() {
+        XCTAssertEqual(LiveMatcher.parseAmount("7-Eleven #123, $4.50, CIBC Visa"), 4.50)
+        XCTAssertEqual(LiveMatcher.parseAmount("Tim Hortons 12.25"), 12.25)
+        XCTAssertEqual(LiveMatcher.parseAmount("4.5"), 4.5)
+        XCTAssertEqual(LiveMatcher.parseAmount("CAD 20"), 20)
+        XCTAssertNil(LiveMatcher.parseAmount("Store 7"))
+    }
+}
