@@ -2,61 +2,62 @@ import Foundation
 import FoundationModels
 import BillCore
 
-/// "Ask about my money" chat. The on-device LLM answers by calling tools that
-/// run real queries over your transactions, so numbers come from your data,
-/// not from the model's imagination.
+/// "Ask about my money" chat.
+///
+/// The on-device model has a small (~4k token) window and is weak at maths, so
+/// for every question the app first computes an exact fact sheet in code
+/// (AskContextBuilder) and the model only turns it into a friendly answer.
+/// Each question gets a fresh session carrying just the previous exchange, so
+/// long chats never overflow.
 @MainActor
 final class FinanceAssistant {
-    private var session: LanguageModelSession
     private let facts: [TxnFact]
+    private var lastExchange: (question: String, answer: String)?
 
     init(facts: [TxnFact], now: Date = Date()) {
         self.facts = facts
-        session = Self.makeSession(facts: facts, now: now)
     }
 
-    private static func makeSession(facts: [TxnFact], now: Date) -> LanguageModelSession {
-        let range: String
-        if let first = facts.map(\.date).min(), let last = facts.map(\.date).max() {
-            range = "\(DateParsing.isoDay.string(from: first)) to \(DateParsing.isoDay.string(from: last))"
-        } else {
-            range = "no data yet"
-        }
-        let tools: [any Tool] = [
-            SpendingTotalsTool(facts: facts),
-            FindTransactionsTool(facts: facts),
-            RecurringChargesTool(facts: facts, now: now),
-            SavingsPlanTool(facts: facts, now: now)
-        ]
-        return LanguageModelSession(tools: tools, instructions: """
-        You are a helpful personal-finance assistant running privately on the user's iPhone. \
-        Today is \(DateParsing.isoDay.string(from: now)). The user's transactions cover \(range). \
-        Always call a tool to get numbers; never guess amounts. Amounts are Canadian dollars. \
-        Months are written yyyy-MM. Spending categories: \(categoryList(facts)). \
-        Accounts: \(accountList(facts)). Use the account argument "credit" or "debit" to compare card types. \
-        Answer in 1-4 short sentences.
-        """)
-    }
-
-    private static func categoryList(_ facts: [TxnFact]) -> String {
-        let custom = Set(facts.compactMap(\.customName))
-        return (SpendCategory.allCases.map(\.rawValue) + custom.sorted()).joined(separator: ", ")
-    }
-
-    private static func accountList(_ facts: [TxnFact]) -> String {
-        let names = Set(facts.compactMap { f in f.account.map { name in "\(name) (\(f.accountKind ?? "other"))" } })
-        return names.isEmpty ? "unknown" : names.sorted().joined(separator: ", ")
-    }
+    private static let instructions = """
+    You are a friendly personal-finance assistant on the user's iPhone. Amounts are Canadian dollars. \
+    Answer ONLY from the data given; never invent numbers. Be specific: name merchants and amounts. \
+    Never suggest cutting rent/housing, insurance, utilities or health costs. Reply in 2-5 short sentences.
+    """
 
     func ask(_ question: String) async throws -> String {
-        do {
-            return try await session.respond(to: question).content
-        } catch LanguageModelSession.GenerationError.exceededContextWindowSize(_) {
-            // Start a fresh conversation when the transcript gets too long.
-            session = Self.makeSession(facts: facts, now: Date())
-            return try await session.respond(to: question).content
+        let target = UserDefaults.standard.double(forKey: "savingsTarget")
+        let income = UserDefaults.standard.double(forKey: "incomeOverride")
+        let context = AskContextBuilder.build(question: question, facts: facts,
+                                              savingsTarget: target > 0 ? target : nil,
+                                              incomeOverride: income > 0 ? income : nil)
+        var prompt = "Today is \(DateParsing.isoDay.string(from: Date())).\nData (exact, computed by the app):\n\(context)\n"
+        if let last = lastExchange {
+            prompt += "\nPrevious question: \(last.question.prefix(200))\nPrevious answer: \(last.answer.prefix(300))\n"
         }
+        prompt += "\nQuestion: \(question)"
+
+        let answer: String
+        do {
+            let session = LanguageModelSession(tools: [FindTransactionsTool(facts: facts)], instructions: Self.instructions)
+            answer = try await session.respond(to: prompt).content
+        } catch {
+            // Retry lean: no tools, no history, shorter data.
+            do {
+                let short = AskContextBuilder.build(question: question, facts: facts,
+                                                    savingsTarget: target > 0 ? target : nil,
+                                                    incomeOverride: income > 0 ? income : nil, maxCharacters: 900)
+                let session = LanguageModelSession(instructions: Self.instructions)
+                answer = try await session.respond(to: "Data:\n\(short)\n\nQuestion: \(question)").content
+            } catch {
+                // Last resort: show the computed facts directly.
+                answer = "Here's what I found:\n" + context.split(separator: "\n").prefix(4).joined(separator: "\n")
+            }
+        }
+        lastExchange = (question, answer)
+        return answer
     }
+
+    func reset() { lastExchange = nil }
 }
 
 // MARK: - Tools
@@ -140,11 +141,11 @@ struct FindTransactionsTool: Tool {
                              from: arguments.fromMonth, to: arguments.toMonth)
             .sorted { $0.amount > $1.amount }
         guard !matched.isEmpty else { return "No matching transactions." }
-        return matched.prefix(12).map { f in
+        return matched.prefix(8).map { f in
             var s = "\(DateParsing.isoDay.string(from: f.date)) \(f.merchant) \(f.isCredit ? "+" : "-")\(SpendingAnalytics.money(f.amount)) [\(f.categoryName)]\(f.account.map { acct in " on \(acct)" } ?? "")"
             if !f.items.isEmpty { s += " items: " + f.items.prefix(4).joined(separator: "; ") }
             return s
-        }.joined(separator: "\n") + (matched.count > 12 ? "\n(\(matched.count - 12) more not shown)" : "")
+        }.joined(separator: "\n") + (matched.count > 8 ? "\n(\(matched.count - 8) more not shown)" : "")
     }
 }
 

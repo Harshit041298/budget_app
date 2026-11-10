@@ -301,3 +301,38 @@ final class SavingsPlannerTests: XCTestCase {
         XCTAssertEqual(SavingsPlanner.plan(b, target: 1500).gap, 0)
     }
 }
+
+final class AskContextTests: XCTestCase {
+    func day(_ m: Int, _ d: Int) -> Date { DateParsing.make(year: 2026, month: m, day: d)! }
+
+    func testShoppingQuestionListsMerchants() {
+        let facts = [
+            TxnFact(date: day(10, 2), merchant: "Amazon", amount: 120, isCredit: false, category: .shopping, items: ["USB cable"]),
+            TxnFact(date: day(10, 5), merchant: "Winners", amount: 60, isCredit: false, category: .shopping),
+            TxnFact(date: day(10, 6), merchant: "Landlord", amount: 1400, isCredit: false, category: .housing)
+        ]
+        let ctx = AskContextBuilder.build(question: "Where am I spending most in shopping?", facts: facts, now: day(10, 20))
+        XCTAssertTrue(ctx.contains("Amazon"))
+        XCTAssertTrue(ctx.contains("Winners"))
+        XCTAssertTrue(ctx.contains("USB cable"))
+        XCTAssertLessThanOrEqual(ctx.count, 1800)
+    }
+
+    func testSavingsQuestionMarksEssentials() {
+        var facts: [TxnFact] = []
+        for m in 7...9 {
+            facts.append(TxnFact(date: day(m, 1), merchant: "Payroll", amount: 4000, isCredit: true, category: .income))
+            facts.append(TxnFact(date: day(m, 2), merchant: "Landlord", amount: 1400, isCredit: false, category: .housing))
+            facts.append(TxnFact(date: day(m, 3), merchant: "Amazon", amount: 1300, isCredit: false, category: .shopping))
+        }
+        let ctx = AskContextBuilder.build(question: "How can I save $1,500 a month?", facts: facts, now: day(10, 10))
+        XCTAssertTrue(ctx.contains("do NOT suggest cutting"))
+        XCTAssertTrue(ctx.contains("Rent & Housing"))
+        XCTAssertTrue(ctx.contains("Savings goal $1,500"))
+    }
+
+    func testPeriods() {
+        XCTAssertEqual(AskContextBuilder.period(for: "last month", now: day(10, 10)).label, SpendingAnalytics.monthLabel(day(9, 1)))
+        XCTAssertEqual(AskContextBuilder.period(for: "spending in august", now: day(10, 10)).label, SpendingAnalytics.monthLabel(day(8, 1)))
+    }
+}
