@@ -11,13 +11,13 @@ enum CloudAI {
         case opus = "claude-opus-5-5"
         var id: String { rawValue }
         var displayName: String { self == .sonnet ? "Claude Sonnet 5.5" : "Claude Opus 5.5" }
-        var detail: String { self == .sonnet ? "Recommended · ~$0.007 per question" : "Smartest · ~$0.016 per question" }
+        var detail: String { self == .sonnet ? "Recommended · ~$0.02–0.04 per question" : "Smartest · ~$0.04–0.08 per question" }
         /// USD per million tokens (input, output).
         var price: (input: Double, output: Double) { self == .sonnet ? (2, 10) : (4, 20) }
     }
 
     enum Failure: LocalizedError {
-        case noKey, badKey, rateLimited, overloaded, refused, http(Int, String), empty
+        case noKey, badKey, rateLimited, overloaded, refused, http(Int, String), empty, capReached(Double)
         var errorDescription: String? {
             switch self {
             case .noKey: return "No Claude API key saved. Add one in Settings → Cloud AI."
@@ -27,6 +27,7 @@ enum CloudAI {
             case .refused: return "Claude declined to answer that request."
             case .http(let code, let msg): return "Claude error \(code): \(msg)"
             case .empty: return "Claude returned an empty answer."
+            case .capReached(let cap): return String(format: "Monthly Claude limit of US$%.2f reached. Raise it in Settings → Cloud AI.", cap)
             }
         }
     }
@@ -39,26 +40,42 @@ enum CloudAI {
     static var hasKey: Bool { Keychain.read() != nil }
     static var isReady: Bool { isEnabled && hasKey }
 
-    /// One request to the Messages API. `effort`: "low" for chat, "medium" for reports.
+    /// One plain request (no tools). `effort`: "low" for chat, "medium" for reports.
     static func complete(system: String, prompt: String, effort: String = "low", maxTokens: Int = 4000) async throws -> String {
-        guard let key = Keychain.read() else { throw Failure.noKey }
-        var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
-        req.httpMethod = "POST"
-        req.timeoutInterval = 60
-        req.setValue("application/json", forHTTPHeaderField: "content-type")
-        req.setValue(key, forHTTPHeaderField: "x-api-key")
-        req.setValue("2026-10-21", forHTTPHeaderField: "anthropic-version")
-        // Server-side refusal fallback: if a safety classifier declines, the API
-        // retries on a fallback model within the same call.
-        req.setValue("server-side-fallback-2026-07-01", forHTTPHeaderField: "anthropic-beta")
-        let body: [String: Any] = [
-            "model": model.rawValue,
+        let json = try await send([
             "max_tokens": maxTokens,
             "system": system,
             "output_config": ["effort": effort],
-            "fallbacks": "default",
             "messages": [["role": "user", "content": prompt]]
-        ]
+        ])
+        if (json["stop_reason"] as? String) == "refusal" { throw Failure.refused }
+        let blocks = json["content"] as? [[String: Any]] ?? []
+        let text = blocks.filter { $0["type"] as? String == "text" }
+            .compactMap { $0["text"] as? String }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw Failure.empty }
+        return text
+    }
+
+    /// Low-level Messages API call. Adds the model, refusal fallback and
+    /// headers; enforces the monthly spend cap; records estimated cost.
+    static func send(_ partialBody: [String: Any]) async throws -> [String: Any] {
+        guard let key = Keychain.read() else { throw Failure.noKey }
+        guard costThisMonth < monthlyCap else { throw Failure.capReached(monthlyCap) }
+        var body = partialBody
+        body["model"] = model.rawValue
+        // Server-side refusal fallback: if a safety classifier declines, the API
+        // retries on a fallback model within the same call.
+        body["fallbacks"] = "default"
+
+        var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 90
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.setValue(key, forHTTPHeaderField: "x-api-key")
+        req.setValue("2026-10-21", forHTTPHeaderField: "anthropic-version")
+        req.setValue("server-side-fallback-2026-07-01", forHTTPHeaderField: "anthropic-beta")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await URLSession.shared.data(for: req)
@@ -74,18 +91,17 @@ enum CloudAI {
             }
         }
         if let usage = json["usage"] as? [String: Any] {
-            let input = (usage["input_tokens"] as? Double) ?? Double(usage["input_tokens"] as? Int ?? 0)
-            let output = (usage["output_tokens"] as? Double) ?? Double(usage["output_tokens"] as? Int ?? 0)
-            recordCost(input: input, output: output)
+            func n(_ k: String) -> Double { (usage[k] as? NSNumber)?.doubleValue ?? 0 }
+            recordCost(input: n("input_tokens"), cacheWrite: n("cache_creation_input_tokens"),
+                       cacheRead: n("cache_read_input_tokens"), output: n("output_tokens"))
         }
-        if (json["stop_reason"] as? String) == "refusal" { throw Failure.refused }
-        let blocks = json["content"] as? [[String: Any]] ?? []
-        let text = blocks.filter { $0["type"] as? String == "text" }
-            .compactMap { $0["text"] as? String }
-            .joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { throw Failure.empty }
-        return text
+        return json
+    }
+
+    static let capKey = "cloudAIMonthlyCap"
+    static var monthlyCap: Double {
+        let v = UserDefaults.standard.double(forKey: capKey)
+        return v > 0 ? v : 5
     }
 
     // MARK: Cost tracking (estimate, using the selected model's prices)
@@ -96,9 +112,10 @@ enum CloudAI {
         return "cloudAICost-" + f.string(from: date)
     }
 
-    private static func recordCost(input: Double, output: Double) {
+    private static func recordCost(input: Double, cacheWrite: Double, cacheRead: Double, output: Double) {
         let p = model.price
-        let cost = input / 1_000_000 * p.input + output / 1_000_000 * p.output
+        // Cache writes ~1.25x input price, cache reads ~0.1x.
+        let cost = (input + cacheWrite * 1.25 + cacheRead * 0.1) / 1_000_000 * p.input + output / 1_000_000 * p.output
         let key = costKey()
         UserDefaults.standard.set(UserDefaults.standard.double(forKey: key) + cost, forKey: key)
         UserDefaults.standard.set(UserDefaults.standard.integer(forKey: key + "-count") + 1, forKey: key + "-count")

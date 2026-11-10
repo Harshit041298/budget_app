@@ -93,7 +93,9 @@ struct AskView: View {
     private var intro: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Ask about your money", systemImage: "sparkles").font(.title3.bold())
-            Text("Numbers are calculated from your transactions on this iPhone; the on-device AI explains them. Nothing leaves your phone.")
+            Text(CloudAI.isReady
+                 ? "Claude looks up your transactions on this iPhone (read-only) and answers. It may ask a quick question if something's unclear."
+                 : "Numbers are calculated from your transactions on this iPhone; the on-device AI explains them. Nothing leaves your phone.")
                 .font(.subheadline).foregroundStyle(.secondary)
             ForEach(suggestions, id: \.self) { s in
                 Button { send(s) } label: {
@@ -145,7 +147,11 @@ struct AskView: View {
         input = ""
         messages.append(ChatMessage(text: q, fromUser: true))
         if assistant == nil || assistantDataCount != entries.count {
-            assistant = FinanceAssistant(facts: AppData.facts(context: context))
+            let catalog = CategoryCatalog.load(context)
+            let budgets = ((try? context.fetch(FetchDescriptor<CategoryBudget>())) ?? []).map {
+                (name: catalog.info(key: $0.categoryRaw).name, key: $0.categoryRaw, limit: $0.monthlyLimit)
+            }
+            assistant = FinanceAssistant(facts: AppData.facts(context: context), budgets: budgets)
             assistantDataCount = entries.count
         }
         thinking = true

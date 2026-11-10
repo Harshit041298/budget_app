@@ -4,6 +4,7 @@ import SwiftUI
 struct CloudAISettingsView: View {
     @AppStorage(CloudAI.enabledKey) private var enabled = false
     @AppStorage(CloudAI.modelKey) private var modelRaw = CloudAI.Model.sonnet.rawValue
+    @AppStorage(CloudAI.capKey) private var cap: Double = 5
     @State private var keyInput = ""
     @State private var hasKey = CloudAI.hasKey
     @State private var testing = false
@@ -12,9 +13,9 @@ struct CloudAISettingsView: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Use Claude for advice", isOn: $enabled)
+                Toggle("Use Claude for Ask, insights and tips", isOn: $enabled)
             } footer: {
-                Text("When on, open-ended questions (\"how can I save more?\", AI insights, savings tips) are answered by Claude. Number questions are still calculated on your iPhone and never sent.")
+                Text("When on, Claude answers every Ask question. It looks things up with read-only tools that run on this iPhone, and can ask you to clarify. When off, offline, or over your monthly limit, the on-device answers are used.")
             }
 
             Section("Model") {
@@ -67,13 +68,20 @@ struct CloudAISettingsView: View {
                 Text("Create a key at console.anthropic.com → API Keys. It's stored only in this iPhone's Keychain (not synced, not in backups).")
             }
 
-            Section("Usage this month (estimate)") {
+            Section {
                 LabeledContent("Requests", value: "\(CloudAI.requestsThisMonth)")
                 LabeledContent("Cost", value: String(format: "US$%.3f", CloudAI.costThisMonth))
+                Stepper(value: $cap, in: 1...100, step: 1) {
+                    LabeledContent("Monthly limit", value: String(format: "US$%.0f", cap))
+                }
+            } header: {
+                Text("Usage this month (estimate)")
+            } footer: {
+                Text("When the estimate reaches your limit, the app stops calling Claude until next month. Also set a spend limit in the Claude Console for a hard cap.")
             }
 
             Section("What is sent") {
-                Text("Only a short summary the app computes for your question — e.g. totals per category, top merchants and amounts for the period you asked about. Never your statements, account or card numbers, or full transaction history. Under Anthropic's commercial API terms your data isn't used to train models by default.")
+                Text("Only what Claude looks up for your question: totals, and up to 30 matching transactions at a time (date, merchant, amount, category, account name, purchased items). Never your statement files, full card or account numbers, or your whole history at once. Under Anthropic's commercial API terms your data isn't used to train models by default.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }

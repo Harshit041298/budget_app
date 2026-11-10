@@ -12,7 +12,7 @@ enum AnswerSource: Equatable {
     var label: String {
         switch self {
         case .calculated: return "Calculated from your data on this iPhone"
-        case .cloud(let name): return "\(name) · a short summary was sent"
+        case .cloud(let detail): return detail
         case .onDevice: return "On-device AI"
         case .facts: return "Computed facts"
         }
@@ -35,9 +35,11 @@ final class FinanceAssistant {
     private let facts: [TxnFact]
     private var lastExchange: (question: String, answer: String)?
     private var lastQuery: AskEngine.Query?
+    private let agent: ClaudeAgent
 
-    init(facts: [TxnFact], now: Date = Date()) {
+    init(facts: [TxnFact], budgets: [(name: String, key: String, limit: Double)] = [], now: Date = Date()) {
         self.facts = facts
+        agent = ClaudeAgent(facts: facts, budgets: budgets)
     }
 
     private static let instructions = """
@@ -47,6 +49,23 @@ final class FinanceAssistant {
     """
 
     func ask(_ question: String) async -> AskReply {
+        // Claude (when enabled) handles every question as an agent with read-only lookups.
+        if CloudAI.isReady {
+            do {
+                let text = try await agent.send(question)
+                let n = agent.lookupsLastAnswer
+                let detail = "\(CloudAI.model.displayName)" + (n > 0 ? " · checked your data \(n)×" : "")
+                lastExchange = (question, text)
+                return AskReply(text: text, source: .cloud(detail))
+            } catch {
+                let local = await localAnswer(question, allowCloud: false)
+                return AskReply(text: local.text + "\n\n_(Claude unavailable: \(error.localizedDescription))_", source: local.source)
+            }
+        }
+        return await localAnswer(question, allowCloud: false)
+    }
+
+    private func localAnswer(_ question: String, allowCloud: Bool) async -> AskReply {
         let now = Date()
         let query = AskEngine.parse(question, facts: facts, previous: lastQuery, now: now)
         lastQuery = query
@@ -70,7 +89,7 @@ final class FinanceAssistant {
             prompt = "Previous question: \(last.question.prefix(200))\nPrevious answer: \(last.answer.prefix(400))\n\n" + prompt
         }
 
-        if CloudAI.isReady {
+        if allowCloud && CloudAI.isReady {
             do {
                 let text = try await CloudAI.complete(system: Self.instructions,
                                                       prompt: prompt + factSheet(4000) + "\n\nQuestion: \(question)")
@@ -109,6 +128,7 @@ final class FinanceAssistant {
     func reset() {
         lastExchange = nil
         lastQuery = nil
+        agent.reset()
     }
 }
 
