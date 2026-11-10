@@ -57,9 +57,10 @@ final class FinanceAssistant {
 
         let target = UserDefaults.standard.double(forKey: "savingsTarget")
         let income = UserDefaults.standard.double(forKey: "incomeOverride")
+        let allFacts = self.facts
         let enriched = question + (query.hasSubject ? " (about: \(query.subjectText))" : "")
-        func facts(_ max: Int) -> String {
-            AskContextBuilder.build(question: enriched, facts: self.facts, now: now,
+        func factSheet(_ max: Int) -> String {
+            AskContextBuilder.build(question: enriched, facts: allFacts, now: now,
                                     savingsTarget: target > 0 ? target : nil,
                                     incomeOverride: income > 0 ? income : nil, maxCharacters: max)
         }
@@ -72,35 +73,35 @@ final class FinanceAssistant {
         if CloudAI.isReady {
             do {
                 let text = try await CloudAI.complete(system: Self.instructions,
-                                                      prompt: prompt + facts(4000) + "\n\nQuestion: \(question)")
+                                                      prompt: prompt + factSheet(4000) + "\n\nQuestion: \(question)")
                 lastExchange = (question, text)
                 return AskReply(text: text, source: .cloud(CloudAI.model.displayName))
             } catch {
                 // Fall through to the on-device model, but tell the user why.
-                let local = await onDevice(prompt: prompt, facts: facts, question: question)
+                let local = await onDevice(prompt: prompt, sheet: factSheet, question: question)
                 return AskReply(text: local.text + "\n\n_(Claude unavailable: \(error.localizedDescription))_", source: local.source)
             }
         }
-        return await onDevice(prompt: prompt, facts: facts, question: question)
+        return await onDevice(prompt: prompt, sheet: factSheet, question: question)
     }
 
-    private func onDevice(prompt: String, facts: (Int) -> String, question: String) async -> AskReply {
+    private func onDevice(prompt: String, sheet: (Int) -> String, question: String) async -> AskReply {
         guard LocalLLM.isAvailable else {
-            return AskReply(text: "Here's what I found:\n" + facts(1200), source: .facts)
+            return AskReply(text: "Here's what I found:\n" + sheet(1200), source: .facts)
         }
         do {
             let session = LanguageModelSession(instructions: Self.instructions)
-            let text = try await session.respond(to: prompt + facts(1800) + "\n\nQuestion: \(question)").content
+            let text = try await session.respond(to: prompt + sheet(1800) + "\n\nQuestion: \(question)").content
             lastExchange = (question, text)
             return AskReply(text: text, source: .onDevice)
         } catch {
             do {
                 let session = LanguageModelSession(instructions: Self.instructions)
-                let text = try await session.respond(to: "Data:\n\(facts(900))\n\nQuestion: \(question)").content
+                let text = try await session.respond(to: "Data:\n\(sheet(900))\n\nQuestion: \(question)").content
                 lastExchange = (question, text)
                 return AskReply(text: text, source: .onDevice)
             } catch {
-                return AskReply(text: "Here's what I found:\n" + facts(1200), source: .facts)
+                return AskReply(text: "Here's what I found:\n" + sheet(1200), source: .facts)
             }
         }
     }
