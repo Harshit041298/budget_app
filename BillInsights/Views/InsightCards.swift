@@ -95,6 +95,7 @@ struct CardSuggestion: Identifiable {
     var id: InsightCard { card }
 
     /// Looks at the data and proposes cards that would be useful but aren't shown.
+    @MainActor
     static func make(facts: [TxnFact], visible: [InsightCard], dismissed: Set<InsightCard>,
                      hasBudgets: Bool, accountCount: Int, now: Date = Date()) -> [CardSuggestion] {
         var out: [CardSuggestion] = []
