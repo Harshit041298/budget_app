@@ -1,4 +1,6 @@
 import SwiftUI
+import SwiftData
+import BillCore
 
 /// Settings → Cloud AI: opt-in Claude for advice, API key in the Keychain.
 struct CloudAISettingsView: View {
@@ -80,6 +82,10 @@ struct CloudAISettingsView: View {
                 Text("When the estimate reaches your limit, the app stops calling Claude until next month. Also set a spend limit in the Claude Console for a hard cap.")
             }
 
+            Section {
+                NavigationLink("Preview what Claude can see") { ClaudeDataPreview() }
+            }
+
             Section("What is sent") {
                 Text("Only what Claude looks up for your question: totals, and up to 30 matching transactions at a time (date, merchant, amount, category, account name, purchased items). Never your statement files, full card or account numbers, or your whole history at once. Under Anthropic's commercial API terms your data isn't used to train models by default.")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -96,6 +102,42 @@ struct CloudAISettingsView: View {
             testResult = "✅ \(CloudAI.model.displayName): \(reply)"
         } catch {
             testResult = "❌ \(error.localizedDescription)"
+        }
+    }
+}
+
+/// Shows exactly what Claude would receive from its two most common lookups,
+/// after the privacy filter — so the user can verify nothing sensitive leaks.
+struct ClaudeDataPreview: View {
+    @Environment(\.modelContext) private var context
+    @State private var overview = ""
+    @State private var sample = ""
+
+    var body: some View {
+        List {
+            Section {
+                Text("This is the exact text Claude receives for these lookups, after card/account numbers, phone numbers, emails and postal codes are removed. Claude never sees your database or statement files.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("Overview lookup") {
+                Text(overview).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+            }
+            Section("Recent transactions lookup (sample)") {
+                Text(sample).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+            }
+        }
+        .navigationTitle("What Claude sees")
+        .task {
+            let facts = AppData.facts(context: context)
+            let tools = AgentTools(facts: facts, budgets: [])
+            overview = Redactor.forCloud(tools.run(name: "get_overview", input: [:]).text)
+            let end = Date()
+            let start = end.addingTimeInterval(-30 * 86_400)
+            sample = Redactor.forCloud(tools.run(name: "search_transactions", input: [
+                "start_date": DateParsing.isoDay.string(from: start),
+                "end_date": DateParsing.isoDay.string(from: end),
+                "limit": 10
+            ]).text)
         }
     }
 }

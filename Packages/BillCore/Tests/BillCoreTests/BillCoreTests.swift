@@ -385,3 +385,34 @@ final class AskEngineTests: XCTestCase {
         XCTAssertNil(AskEngine.answer(q, facts: facts, now: day(10, 20)))
     }
 }
+
+final class RedactorTests: XCTestCase {
+    func testRemovesSecurityDetails() {
+        let text = """
+        CIBC Dividend Visa 4500 **** **** 1234
+        Account number: 12345-678-9012345
+        Transit 00123 Institution 010
+        SIN 123-456-789  Call 1-800-465-2422  me@example.com  Toronto ON M5V 3L9
+        Reference 9876543210
+        4500123412341234
+        """
+        let r = Redactor.redact(text)
+        XCTAssertFalse(r.contains("9012345"), r)
+        XCTAssertFalse(r.contains("123-456-789"), r)
+        XCTAssertFalse(r.contains("465-2422"), r)
+        XCTAssertFalse(r.contains("me@example.com"), r)
+        XCTAssertFalse(r.contains("M5V 3L9"), r)
+        XCTAssertFalse(r.contains("4500123412341234"), r)
+        XCTAssertTrue(r.contains("card ••1234"), r)
+        XCTAssertTrue(r.contains("CIBC Dividend Visa"), r)
+    }
+
+    func testKeepsAmountsDatesAndMerchants() {
+        let line = "2026-10-04 | Tim Hortons | -$1,234.56 | Dining | Oct 4, 2026"
+        XCTAssertEqual(Redactor.redact(line), line)
+    }
+
+    func testCloudFormHidesLastDigits() {
+        XCTAssertEqual(Redactor.forCloud("Card ••1234"), "Card ••")
+    }
+}

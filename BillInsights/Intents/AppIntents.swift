@@ -46,6 +46,8 @@ struct LogPurchaseIntent: AppIntent {
                                        externalID: "applepay:\(UUID().uuidString)")
         let entry = LedgerEntry(parsed: parsed, merchant: clean, category: result.category, source: .applePay)
         entry.customCategoryKey = result.customKey
+        entry.fingerprint = Privacy.hash(entry.fingerprint)
+        entry.rawDescription = Redactor.redact(entry.rawDescription)
         context.insert(entry)
         CategoryLearning.applyRules(to: [entry], context: context)
         ImportService.ensureAccounts(for: [entry], context: context)

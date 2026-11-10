@@ -32,7 +32,10 @@ final class ImportService {
         defer { isImporting = false; status = "" }
         for url in urls {
             let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            defer {
+                if scoped { url.stopAccessingSecurityScopedResource() }
+                Privacy.deleteInboxCopy(url)
+            }
             let name = url.lastPathComponent
             do {
                 status = "Reading \(name)…"
@@ -121,7 +124,10 @@ final class ImportService {
         let categorizer = Categorizer.load(context)
 
         let existing = Set(((try? context.fetch(FetchDescriptor<LedgerEntry>())) ?? []).map(\.fingerprint))
-        let doc = ImportedDocument(filename: filename, kind: result.kind, extractedText: String(text.prefix(200_000)),
+        // The original statement text is only used in memory for parsing; what
+        // is stored is redacted (or nothing, by default).
+        let doc = ImportedDocument(filename: Redactor.redact(filename), kind: result.kind,
+                                   extractedText: Privacy.storedText(text),
                                    notes: result.warnings.joined(separator: "\n"))
         context.insert(doc)
 
@@ -130,7 +136,7 @@ final class ImportService {
         var duplicates = 0
         var seenThisFile = Set<String>()
         for parsed in result.transactions {
-            let fp = parsed.fingerprint
+            let fp = Privacy.hash(parsed.fingerprint)
             if existing.contains(fp) || !seenThisFile.insert(fp).inserted {
                 duplicates += 1
                 continue
@@ -142,6 +148,8 @@ final class ImportService {
             // Credits in a spending category are refunds; other credits are usually payments or deposits.
             if parsed.isCredit && cat.source == .fallback { entry.category = .transfer }
             entry.customCategoryKey = cat.customKey
+            entry.fingerprint = fp
+            entry.rawDescription = Redactor.redact(parsed.rawDescription)
             entry.account = Self.accountKey(for: parsed, kind: result.kind)
             entry.document = doc
             context.insert(entry)

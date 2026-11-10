@@ -10,6 +10,7 @@ struct SettingsView: View {
     @AppStorage("countAmazonOrders") private var countAmazon = false
     @AppStorage("appLockEnabled") private var lockEnabled = false
     @AppStorage("billRemindersEnabled") private var billReminders = false
+    @AppStorage(Privacy.keepTextKey) private var keepText = false
     @State private var exportURL: URL?
     @State private var confirmDelete = false
 
@@ -66,7 +67,8 @@ struct SettingsView: View {
 
                 Section("Privacy") {
                     Toggle("Require Face ID", isOn: $lockEnabled)
-                    Text("All data is stored only on this iPhone, in the app's sandbox. The app makes no network requests.")
+                    Toggle("Keep statement text (redacted)", isOn: $keepText)
+                    Text("Your data is stored only in an encrypted database on this iPhone. Card and account numbers, SINs, phone numbers, emails and postal codes are removed before anything is saved; statement text isn't kept unless you turn it on above (and then only redacted). The only network use is Claude, if you enable it, which sees just the lookups it makes — with those details removed again.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
 
@@ -156,9 +158,14 @@ struct DocumentDetailView: View {
                 }
             }
             Section("Extracted text") {
-                Text(document.extractedText.prefix(20_000))
-                    .font(.system(.caption2, design: .monospaced))
-                    .textSelection(.enabled)
+                if document.extractedText.isEmpty {
+                    Text("Not stored, for privacy. Turn on Settings → Privacy → Keep statement text to keep a redacted copy of future imports for troubleshooting.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text(document.extractedText.prefix(20_000))
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                }
             }
         }
         .navigationTitle(document.filename)

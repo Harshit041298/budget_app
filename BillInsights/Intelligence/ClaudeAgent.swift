@@ -73,7 +73,9 @@ final class ClaudeAgent {
                     let id = use["id"] as? String ?? ""
                     let name = use["name"] as? String ?? ""
                     let input = use["input"] as? [String: Any] ?? [:]
-                    let output = tools.run(name: name, input: input)
+                    let raw = tools.run(name: name, input: input)
+                    // Second privacy filter: no card/account digits, phones, emails etc. leave the phone.
+                    let output = AgentTools.Output(text: Redactor.forCloud(raw.text), isError: raw.isError)
                     lookupsLastAnswer += 1
                     results.append(["type": "tool_result", "tool_use_id": id, "content": output.text,
                                     "is_error": output.isError])

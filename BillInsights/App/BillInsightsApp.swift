@@ -52,7 +52,10 @@ struct RootView: View {
                 }
             }
         }
-        .task { ImportService.backfillAccountsIfNeeded(context: context) }
+        .task {
+            Privacy.migrateIfNeeded(context: context)
+            ImportService.backfillAccountsIfNeeded(context: context)
+        }
         .onOpenURL { url in
             // "Open in Bill Insights" / Share from Files, Mail or the CIBC app.
             tab = 2
