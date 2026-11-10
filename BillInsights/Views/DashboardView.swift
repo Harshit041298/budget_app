@@ -49,6 +49,9 @@ struct DashboardView: View {
     @State private var reportMonth: Date?
     @State private var generating = false
     @State private var reportError: String?
+    @State private var customizing = false
+    @AppStorage("insightCards") private var layoutRaw = ""
+    @AppStorage("dismissedCardSuggestions") private var dismissedRaw = ""
 
     var body: some View {
         NavigationStack {
@@ -71,10 +74,29 @@ struct DashboardView: View {
                 if !accounts.isEmpty {
                     ToolbarItem(placement: .topBarTrailing) { scopeMenu }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { customizing = true } label: { Image(systemName: "slider.horizontal.3") }
+                        .accessibilityLabel("Customise cards")
+                }
+            }
+            .sheet(isPresented: $customizing) {
+                CustomizeInsightsView(suggestions: suggestions(currentFacts()))
             }
             .onAppear(perform: pickInitialMonth)
             .onChange(of: entries.count) { _, _ in pickInitialMonth() }
         }
+    }
+
+    private func currentFacts() -> [TxnFact] {
+        let catalog = CategoryCatalog(customs)
+        let map = AppData.accountMap(accounts)
+        return entries.map { $0.fact(countAmazonOrders: countAmazon, catalog: catalog, accounts: map) }
+    }
+
+    private func suggestions(_ facts: [TxnFact]) -> [CardSuggestion] {
+        let dismissed = Set(dismissedRaw.split(separator: ",").compactMap { InsightCard(rawValue: String($0)) })
+        return CardSuggestion.make(facts: facts, visible: InsightCard.decode(layoutRaw), dismissed: dismissed,
+                                   hasBudgets: !budgets.isEmpty, accountCount: accounts.count)
     }
 
     private func pickInitialMonth() {
@@ -120,18 +142,31 @@ struct DashboardView: View {
                     .padding(.horizontal)
                 }
                 summaryCard(facts: facts, monthFacts: monthFacts, spend: spend)
-                reviewBanner(facts: facts, monthFacts: monthFacts, spend: spend)
-                if scope == .all {
-                    accountsCard(monthFacts: SpendingAnalytics.inMonth(allFacts, month))
+                suggestionBanner(allFacts: allFacts)
+                ForEach(InsightCard.decode(layoutRaw)) { card in
+                    switch card {
+                    case .review: reviewBanner(facts: facts, monthFacts: monthFacts, spend: spend)
+                    case .accounts:
+                        if scope == .all { accountsCard(monthFacts: SpendingAnalytics.inMonth(allFacts, month)) }
+                    case .budgets: budgetsCard(facts: allFacts, catalog: catalog)
+                    case .categories: categoriesCard(monthFacts: monthFacts, spend: spend, catalog: catalog)
+                    case .pace: paceCard(facts: facts)
+                    case .history: historyCard(facts: facts)
+                    case .categoryTrend: categoryTrendCard(facts: facts, catalog: catalog)
+                    case .incomeVsSpend: incomeCard(facts: facts)
+                    case .weekday: weekdayCard(facts: facts)
+                    case .topMerchantsChart: merchantsChartCard(monthFacts: monthFacts)
+                    case .ai: aiCard(facts: facts)
+                    case .recurring: recurringCard(facts: facts)
+                    case .unusual: unusualCard(facts: facts, monthFacts: monthFacts)
+                    case .merchants: merchantsCard(monthFacts: monthFacts)
+                    case .products: productsCard(monthFacts: monthFacts)
+                    }
                 }
-                budgetsCard(facts: allFacts, catalog: catalog)
-                categoriesCard(monthFacts: monthFacts, spend: spend, catalog: catalog)
-                historyCard(facts: facts)
-                aiCard(facts: facts)
-                recurringCard(facts: facts)
-                unusualCard(facts: facts, monthFacts: monthFacts)
-                merchantsCard(monthFacts: monthFacts)
-                productsCard(monthFacts: monthFacts)
+                Button { customizing = true } label: {
+                    Label("Customise cards", systemImage: "slider.horizontal.3").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
             }
             .padding()
             .padding(.bottom, 60)
@@ -139,6 +174,163 @@ struct DashboardView: View {
     }
 
     // MARK: Cards
+
+    @ViewBuilder
+    private func suggestionBanner(allFacts: [TxnFact]) -> some View {
+        let s = suggestions(allFacts)
+        if let first = s.first {
+            Button { customizing = true } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "sparkles")
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(Color.purple.gradient, in: RoundedRectangle(cornerRadius: 10))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(s.count == 1 ? "Suggested card: \(first.card.title)" : "\(s.count) suggested cards for you").bold()
+                        Text(first.reason).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                }
+                .padding()
+                .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func paceCard(facts: [TxnFact]) -> some View {
+        let thisMonth = SpendingAnalytics.cumulativeDaily(facts, month: month, upTo: Date())
+        let lastMonth = SpendingAnalytics.cumulativeDaily(facts, month: DateParsing.addMonths(-1, to: month))
+        let today = thisMonth.last
+        let sameDayLast = today.flatMap { t in lastMonth.first { $0.day == min(t.day, lastMonth.count) } }
+        return Card(title: "Spending pace", systemImage: "chart.line.uptrend.xyaxis") {
+            if let today, let sameDayLast, sameDayLast.total > 0 {
+                let diff = today.total - sameDayLast.total
+                Text("\(money(abs(diff))) \(diff >= 0 ? "more" : "less") than at this point last month")
+                    .font(.subheadline).foregroundStyle(diff >= 0 ? Color.red : Color.green)
+            }
+            Chart {
+                ForEach(lastMonth) { p in
+                    LineMark(x: .value("Day", p.day), y: .value("Spent", p.total), series: .value("Month", "Last month"))
+                        .foregroundStyle(Color.gray.opacity(0.6))
+                        .lineStyle(StrokeStyle(lineWidth: 2, dash: [4, 3]))
+                }
+                ForEach(thisMonth) { p in
+                    AreaMark(x: .value("Day", p.day), y: .value("Spent", p.total))
+                        .foregroundStyle(Color.accentColor.opacity(0.15))
+                    LineMark(x: .value("Day", p.day), y: .value("Spent", p.total), series: .value("Month", "This month"))
+                        .foregroundStyle(Color.accentColor)
+                        .lineStyle(StrokeStyle(lineWidth: 3))
+                }
+            }
+            .chartXScale(domain: 1...31)
+            .chartYAxis { AxisMarks { v in AxisGridLine(); AxisValueLabel { if let d = v.as(Double.self) { Text(compactMoney(d)) } } } }
+            .frame(height: 180)
+            HStack(spacing: 16) {
+                Label("This month", systemImage: "line.diagonal").foregroundStyle(Color.accentColor)
+                Label("Last month", systemImage: "line.diagonal").foregroundStyle(.secondary)
+            }
+            .font(.caption)
+        }
+    }
+
+    @ViewBuilder
+    private func categoryTrendCard(facts: [TxnFact], catalog: CategoryCatalog) -> some View {
+        let points = SpendingAnalytics.categoryTrend(facts, months: 6, endingAt: month, top: 5)
+        if !points.isEmpty {
+            let names = Array(NSOrderedSet(array: points.map(\.name))) as? [String] ?? []
+            let colors: [Color] = names.map { name in
+                if let p = points.first(where: { $0.name == name }), p.key != "_rest" { return catalog.info(key: p.key).color }
+                return .gray
+            }
+            Card(title: "Category trends", systemImage: "chart.bar.xaxis") {
+                Chart(points) { p in
+                    BarMark(x: .value("Month", p.month, unit: .month), y: .value("Spent", p.total))
+                        .foregroundStyle(by: .value("Category", p.name))
+                }
+                .chartForegroundStyleScale(domain: names, range: colors)
+                .chartXAxis {
+                    AxisMarks(values: .stride(by: .month)) { _ in AxisValueLabel(format: .dateTime.month(.abbreviated)) }
+                }
+                .chartYAxis { AxisMarks { v in AxisGridLine(); AxisValueLabel { if let d = v.as(Double.self) { Text(compactMoney(d)) } } } }
+                .chartLegend(position: .bottom, alignment: .leading)
+                .frame(height: 220)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func incomeCard(facts: [TxnFact]) -> some View {
+        let history = SpendingAnalytics.monthly(facts, months: 6, endingAt: month)
+        if history.contains(where: { $0.income > 0 }) {
+            let thisMonth = history.last
+            Card(title: "Income vs spending", systemImage: "arrow.left.arrow.right.circle") {
+                if let m = thisMonth, m.income > 0 {
+                    let rate = (m.income - m.spend) / m.income * 100
+                    Text(String(format: "Savings rate this month: %.0f%%", rate))
+                        .font(.subheadline.bold())
+                        .foregroundStyle(rate >= 0 ? Color.green : Color.red)
+                }
+                Chart {
+                    ForEach(history) { m in
+                        BarMark(x: .value("Month", m.month, unit: .month), y: .value("Amount", m.income))
+                            .foregroundStyle(by: .value("Type", "Income"))
+                            .position(by: .value("Type", "Income"))
+                        BarMark(x: .value("Month", m.month, unit: .month), y: .value("Amount", m.spend))
+                            .foregroundStyle(by: .value("Type", "Spending"))
+                            .position(by: .value("Type", "Spending"))
+                    }
+                }
+                .chartForegroundStyleScale(["Income": Color.green, "Spending": Color.pink])
+                .chartXAxis {
+                    AxisMarks(values: .stride(by: .month)) { _ in AxisValueLabel(format: .dateTime.month(.abbreviated)) }
+                }
+                .chartYAxis { AxisMarks { v in AxisGridLine(); AxisValueLabel { if let d = v.as(Double.self) { Text(compactMoney(d)) } } } }
+                .frame(height: 180)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func weekdayCard(facts: [TxnFact]) -> some View {
+        let window = facts.filter { $0.date >= DateParsing.addMonths(-2, to: month) && $0.date < DateParsing.addMonths(1, to: month) }
+        let days = SpendingAnalytics.byWeekday(window)
+        if let top = days.max(by: { $0.average < $1.average }), top.average > 0 {
+            let symbols = Calendar.current.shortWeekdaySymbols
+            Card(title: "Spending by weekday", systemImage: "calendar") {
+                Text("\(Calendar.current.weekdaySymbols[top.weekday - 1])s are your biggest day, about \(money(top.average)) on average.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                Chart(days) { d in
+                    BarMark(x: .value("Day", symbols[d.weekday - 1]), y: .value("Average", d.average))
+                        .foregroundStyle(d.weekday == top.weekday ? Color.orange : Color.orange.opacity(0.4))
+                        .cornerRadius(4)
+                }
+                .chartYAxis { AxisMarks { v in AxisGridLine(); AxisValueLabel { if let d = v.as(Double.self) { Text(compactMoney(d)) } } } }
+                .frame(height: 160)
+                Text("Average per day over the last 3 months").font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func merchantsChartCard(monthFacts: [TxnFact]) -> some View {
+        let merchants = SpendingAnalytics.topMerchants(monthFacts, limit: 8)
+        if !merchants.isEmpty {
+            Card(title: "Top merchants", systemImage: "chart.bar.doc.horizontal") {
+                Chart(merchants) { m in
+                    BarMark(x: .value("Spent", m.total), y: .value("Merchant", m.merchant))
+                        .foregroundStyle(Color.indigo.gradient)
+                        .cornerRadius(4)
+                        .annotation(position: .trailing) {
+                            Text(compactMoney(m.total)).font(.caption2).foregroundStyle(.secondary)
+                        }
+                }
+                .chartXAxis(.hidden)
+                .frame(height: CGFloat(merchants.count) * 32 + 10)
+            }
+        }
+    }
 
     private func summaryCard(facts: [TxnFact], monthFacts: [TxnFact], spend: Double) -> some View {
         let prevSpend = SpendingAnalytics.totalSpend(SpendingAnalytics.inMonth(facts, DateParsing.addMonths(-1, to: month)))

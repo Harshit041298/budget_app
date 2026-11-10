@@ -101,6 +101,14 @@ struct Card<Content: View>: View {
 
 func money(_ v: Double) -> String { SpendingAnalytics.money(v) }
 
+/// Short axis labels: $950, $1.2k, $15k.
+func compactMoney(_ v: Double) -> String {
+    let a = abs(v)
+    if a >= 10_000 { return String(format: "$%.0fk", v / 1000) }
+    if a >= 1_000 { return String(format: "$%.1fk", v / 1000) }
+    return String(format: "$%.0f", v)
+}
+
 extension Date {
     var shortDay: String { formatted(.dateTime.month(.abbreviated).day()) }
     var monthYear: String { formatted(.dateTime.month(.wide).year()) }

@@ -221,3 +221,31 @@ final class AccountAndCustomTests: XCTestCase {
         XCTAssertEqual(changes.first?.oldAmount, 11.99)
     }
 }
+
+final class ChartDataTests: XCTestCase {
+    func day(_ m: Int, _ d: Int) -> Date { DateParsing.make(year: 2026, month: m, day: d)! }
+
+    func testCumulativeDaily() {
+        let facts = [
+            TxnFact(date: day(10, 2), merchant: "A", amount: 10, isCredit: false, category: .dining),
+            TxnFact(date: day(10, 5), merchant: "B", amount: 20, isCredit: false, category: .dining)
+        ]
+        let pts = SpendingAnalytics.cumulativeDaily(facts, month: day(10, 1), upTo: day(10, 6))
+        XCTAssertEqual(pts.count, 6)
+        XCTAssertEqual(pts[1].total, 10)
+        XCTAssertEqual(pts[5].total, 30)
+        XCTAssertEqual(SpendingAnalytics.cumulativeDaily(facts, month: day(10, 1)).count, 31)
+    }
+
+    func testWeekdayAndTrend() {
+        let facts = (1...28).map { d in
+            TxnFact(date: day(10, d), merchant: "A", amount: Double(d), isCredit: false, category: d % 2 == 0 ? .dining : .groceries)
+        }
+        let w = SpendingAnalytics.byWeekday(facts)
+        XCTAssertEqual(w.count, 7)
+        XCTAssertEqual(w.reduce(0) { $0 + $1.total }, Double((1...28).reduce(0, +)), accuracy: 0.001)
+        let trend = SpendingAnalytics.categoryTrend(facts, months: 3, endingAt: day(10, 1), top: 1)
+        XCTAssertEqual(Set(trend.map(\.key)), ["dining", "_rest"])
+        XCTAssertEqual(SpendingAnalytics.monthsWithData(facts), 1)
+    }
+}

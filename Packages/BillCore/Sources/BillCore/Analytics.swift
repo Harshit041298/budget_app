@@ -86,6 +86,27 @@ public struct PriceChange: Sendable, Hashable, Identifiable {
     public var id: String { merchant }
 }
 
+public struct DailyPoint: Sendable, Hashable, Identifiable {
+    public var day: Int
+    public var total: Double
+    public var id: Int { day }
+}
+
+public struct WeekdayTotal: Sendable, Hashable, Identifiable {
+    public var weekday: Int      // 1 = Sunday
+    public var average: Double
+    public var total: Double
+    public var id: Int { weekday }
+}
+
+public struct CategoryMonthPoint: Sendable, Hashable, Identifiable {
+    public var month: Date
+    public var key: String
+    public var name: String
+    public var total: Double
+    public var id: String { "\(key)|\(month.timeIntervalSince1970)" }
+}
+
 public struct MonthTotal: Sendable, Hashable, Identifiable {
     public var month: Date
     public var spend: Double
@@ -428,6 +449,77 @@ public enum SpendingAnalytics {
     /// Spend per category for a month (for budgets).
     public static func spend(in category: SpendCategory, _ facts: [TxnFact], month: Date) -> Double {
         totalSpend(inMonth(facts, month).filter { $0.category == category })
+    }
+
+    // MARK: Chart data
+
+    /// Running total of spending by day of month, for "this month vs last month" pace charts.
+    public static func cumulativeDaily(_ facts: [TxnFact], month: Date, upTo now: Date? = nil) -> [DailyPoint] {
+        let cal = DateParsing.calendar
+        let start = DateParsing.startOfMonth(month)
+        guard let days = cal.range(of: .day, in: .month, for: start)?.count else { return [] }
+        var perDay = [Double](repeating: 0, count: days + 1)
+        for f in inMonth(facts, month) {
+            let d = cal.component(.day, from: f.date)
+            if d >= 1 && d <= days { perDay[d] += f.spend }
+        }
+        var lastDay = days
+        if let now, DateParsing.startOfMonth(now) == start { lastDay = cal.component(.day, from: now) }
+        var running = 0.0
+        return (1...lastDay).map { d in
+            running += perDay[d]
+            return DailyPoint(day: d, total: running)
+        }
+    }
+
+    /// Average spending per weekday (1 = Sunday … 7 = Saturday) across the given facts.
+    public static func byWeekday(_ facts: [TxnFact]) -> [WeekdayTotal] {
+        let cal = DateParsing.calendar
+        var totals = [Double](repeating: 0, count: 8)
+        var dayKeys = [Set<String>](repeating: [], count: 8)
+        for f in facts where f.spend > 0 {
+            let w = cal.component(.weekday, from: f.date)
+            totals[w] += f.spend
+            dayKeys[w].insert(DateParsing.isoDay.string(from: f.date))
+        }
+        // Average over the number of such weekdays in the date range.
+        guard let first = facts.map(\.date).min(), let last = facts.map(\.date).max() else { return [] }
+        var counts = [Int](repeating: 0, count: 8)
+        var d = cal.startOfDay(for: first)
+        while d <= last {
+            counts[cal.component(.weekday, from: d)] += 1
+            d = cal.date(byAdding: .day, value: 1, to: d) ?? last.addingTimeInterval(86_400)
+        }
+        return (1...7).map { w in
+            WeekdayTotal(weekday: w, average: counts[w] > 0 ? totals[w] / Double(counts[w]) : 0, total: totals[w])
+        }
+    }
+
+    /// Monthly spend for the top `top` categories (others grouped as "Everything else").
+    public static func categoryTrend(_ facts: [TxnFact], months: Int, endingAt end: Date, top: Int = 5) -> [CategoryMonthPoint] {
+        let last = DateParsing.startOfMonth(end)
+        let monthsList = (0..<months).reversed().map { DateParsing.addMonths(-$0, to: last) }
+        let windowFacts = facts.filter { $0.date >= monthsList.first! && $0.date < DateParsing.addMonths(1, to: last) }
+        let leaders = byCategoryKey(windowFacts).prefix(top)
+        let leaderKeys = Set(leaders.map(\.key))
+        var out: [CategoryMonthPoint] = []
+        for m in monthsList {
+            let mf = inMonth(facts, m)
+            for l in leaders {
+                out.append(CategoryMonthPoint(month: m, key: l.key, name: l.name,
+                                              total: max(0, totalSpend(mf.filter { $0.categoryKey == l.key }))))
+            }
+            let rest = totalSpend(mf.filter { !leaderKeys.contains($0.categoryKey) })
+            if rest > 0.005 {
+                out.append(CategoryMonthPoint(month: m, key: "_rest", name: "Everything else", total: rest))
+            }
+        }
+        return out
+    }
+
+    /// Number of distinct months that have any transactions.
+    public static func monthsWithData(_ facts: [TxnFact]) -> Int {
+        Set(facts.map { DateParsing.isoMonth.string(from: $0.date) }).count
     }
 
     public static func monthLabel(_ date: Date) -> String {
