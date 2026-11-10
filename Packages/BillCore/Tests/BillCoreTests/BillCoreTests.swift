@@ -249,3 +249,17 @@ final class ChartDataTests: XCTestCase {
         XCTAssertEqual(SpendingAnalytics.monthsWithData(facts), 1)
     }
 }
+
+final class CalendarTests: XCTestCase {
+    func testDailyTotals() {
+        let d = { (day: Int) in DateParsing.make(year: 2026, month: 10, day: day)! }
+        let facts = [
+            TxnFact(date: d(3), merchant: "A", amount: 10, isCredit: false, category: .dining),
+            TxnFact(date: d(3), merchant: "B", amount: 5, isCredit: false, category: .dining),
+            TxnFact(date: d(4), merchant: "Pay", amount: 500, isCredit: true, category: .transfer)
+        ]
+        let t = SpendingAnalytics.dailyTotals(facts, month: d(1))
+        XCTAssertEqual(t[3], 15)
+        XCTAssertNil(t[4])
+    }
+}

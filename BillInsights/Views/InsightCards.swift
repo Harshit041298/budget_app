@@ -3,7 +3,7 @@ import BillCore
 
 /// Cards the Insights tab can show. Users choose which ones and in what order.
 enum InsightCard: String, CaseIterable, Identifiable {
-    case review, accounts, budgets, categories, pace, history, categoryTrend, incomeVsSpend,
+    case review, accounts, budgets, calendar, categories, pace, history, categoryTrend, incomeVsSpend,
          weekday, topMerchantsChart, ai, recurring, unusual, merchants, products
 
     var id: String { rawValue }
@@ -13,6 +13,7 @@ enum InsightCard: String, CaseIterable, Identifiable {
         case .review: return "Uncategorised reminder"
         case .accounts: return "Credit vs debit"
         case .budgets: return "Budgets"
+        case .calendar: return "Spending calendar"
         case .categories: return "Where it went"
         case .pace: return "Spending pace"
         case .history: return "Last 6 months"
@@ -33,6 +34,7 @@ enum InsightCard: String, CaseIterable, Identifiable {
         case .review: return "tag"
         case .accounts: return "creditcard.and.123"
         case .budgets: return "gauge.with.dots.needle.50percent"
+        case .calendar: return "calendar.day.timeline.left"
         case .categories: return "chart.pie"
         case .pace: return "chart.line.uptrend.xyaxis"
         case .history: return "chart.bar"
@@ -53,6 +55,7 @@ enum InsightCard: String, CaseIterable, Identifiable {
         case .review: return "Reminds you to file uncategorised merchants."
         case .accounts: return "Credit cards vs debit, and spend per card."
         case .budgets: return "Progress bars for your monthly limits."
+        case .calendar: return "Month grid shaded by daily spending; tap a day for details."
         case .categories: return "Donut chart of this month's categories."
         case .pace: return "This month's running total vs last month, day by day."
         case .history: return "Monthly totals for the last 6 months."
@@ -69,7 +72,7 @@ enum InsightCard: String, CaseIterable, Identifiable {
     }
 
     static let defaultLayout: [InsightCard] = [
-        .review, .accounts, .budgets, .categories, .pace, .history, .ai, .recurring, .unusual, .merchants, .products
+        .review, .calendar, .accounts, .budgets, .categories, .pace, .weekday, .history, .ai, .recurring, .unusual, .merchants, .products
     ]
 
     // MARK: Persistence (comma-separated raw values in AppStorage)
@@ -103,6 +106,10 @@ struct CardSuggestion: Identifiable {
         let monthlyAvg = months > 0 ? SpendingAnalytics.totalSpend(facts) / Double(months) : 0
 
         if !thisMonth.isEmpty {
+            let days = SpendingAnalytics.dailyTotals(facts, month: now)
+            if let big = days.max(by: { $0.value < $1.value }) {
+                add(.calendar, "See every day at a glance — your biggest day this month was the \(big.key)\(ordinal(big.key)) (\(money(big.value))).")
+            }
             add(.pace, "You have spending this month — see if you're ahead of or behind last month's pace.")
         }
         if months >= 3 {
@@ -138,6 +145,11 @@ struct CardSuggestion: Identifiable {
         if LocalLLM.isAvailable { add(.ai, "Let the on-device AI write a monthly summary with a saving tip.") }
         return out
     }
+}
+
+private func ordinal(_ n: Int) -> String {
+    if (11...13).contains(n % 100) { return "th" }
+    switch n % 10 { case 1: return "st"; case 2: return "nd"; case 3: return "rd"; default: return "th" }
 }
 
 /// Choose, reorder and get suggestions for Insights cards.

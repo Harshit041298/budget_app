@@ -50,6 +50,7 @@ struct DashboardView: View {
     @State private var generating = false
     @State private var reportError: String?
     @State private var customizing = false
+    @State private var calendarDay: Int?
     @AppStorage("insightCards") private var layoutRaw = ""
     @AppStorage("dismissedCardSuggestions") private var dismissedRaw = ""
 
@@ -149,6 +150,7 @@ struct DashboardView: View {
                     case .accounts:
                         if scope == .all { accountsCard(monthFacts: SpendingAnalytics.inMonth(allFacts, month)) }
                     case .budgets: budgetsCard(facts: allFacts, catalog: catalog)
+                    case .calendar: calendarCard(facts: facts)
                     case .categories: categoriesCard(monthFacts: monthFacts, spend: spend, catalog: catalog)
                     case .pace: paceCard(facts: facts)
                     case .history: historyCard(facts: facts)
@@ -196,6 +198,38 @@ struct DashboardView: View {
                 .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
             }
             .buttonStyle(.plain)
+        }
+    }
+
+    private func calendarCard(facts: [TxnFact]) -> some View {
+        Card(title: "Spending calendar", systemImage: "calendar.day.timeline.left") {
+            SpendingCalendar(facts: facts, month: month, compact: false, selectedDay: $calendarDay)
+            if let day = calendarDay {
+                let cal = Calendar.current
+                let dayFacts = SpendingAnalytics.inMonth(facts, month)
+                    .filter { cal.component(.day, from: $0.date) == day && $0.spend != 0 }
+                    .sorted { $0.amount > $1.amount }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(month.formatted(.dateTime.month(.abbreviated))) \(day): \(money(SpendingAnalytics.totalSpend(dayFacts)))")
+                        .font(.subheadline.bold())
+                    if dayFacts.isEmpty {
+                        Text("No spending 🎉").font(.caption).foregroundStyle(.secondary)
+                    }
+                    ForEach(dayFacts.prefix(5)) { f in
+                        HStack {
+                            Text(f.merchant).font(.caption)
+                            Spacer()
+                            Text(money(f.amount)).font(.caption)
+                        }
+                    }
+                }
+            }
+            NavigationLink {
+                SpendingCalendarScreen(facts: facts, month: month)
+            } label: {
+                Label("Open full calendar", systemImage: "arrow.up.left.and.arrow.down.right")
+            }
+            .font(.subheadline)
         }
     }
 

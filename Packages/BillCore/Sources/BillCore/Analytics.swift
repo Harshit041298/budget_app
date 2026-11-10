@@ -517,6 +517,16 @@ public enum SpendingAnalytics {
         return out
     }
 
+    /// Spending per day of the month: [day: total]. Days with no spending are omitted.
+    public static func dailyTotals(_ facts: [TxnFact], month: Date) -> [Int: Double] {
+        let cal = DateParsing.calendar
+        var out: [Int: Double] = [:]
+        for f in inMonth(facts, month) where f.spend != 0 {
+            out[cal.component(.day, from: f.date), default: 0] += f.spend
+        }
+        return out.filter { $0.value > 0.005 }
+    }
+
     /// Number of distinct months that have any transactions.
     public static func monthsWithData(_ facts: [TxnFact]) -> Int {
         Set(facts.map { DateParsing.isoMonth.string(from: $0.date) }).count
