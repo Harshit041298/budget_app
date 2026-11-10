@@ -7,12 +7,12 @@ struct IntentFailure: Error, CustomLocalizedStringResourceConvertible {
     var localizedStringResource: LocalizedStringResource { LocalizedStringResource(stringLiteral: message) }
 }
 
-/// Logs an Apple Pay purchase. Designed for a Shortcuts "Transaction"
+/// Logs a Wallet card purchase. Designed for a Shortcuts "Transaction"
 /// automation, which fires whenever you pay with a card in Wallet.
 struct LogPurchaseIntent: AppIntent {
     static var title: LocalizedStringResource = "Log Purchase"
     static var description = IntentDescription(
-        "Adds a purchase to Bill Insights. Use it in a Shortcuts “Transaction” automation to log every Apple Pay tap automatically.")
+        "Adds a purchase to Bill Insights. Use it in a Shortcuts “Transaction” automation to log every Wallet card payment automatically.")
     static var openAppWhenRun: Bool = false
 
     @Parameter(title: "Merchant")
