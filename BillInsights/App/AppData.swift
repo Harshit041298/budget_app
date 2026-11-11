@@ -7,7 +7,7 @@ import BillCore
 enum AppData {
     @MainActor static let container: ModelContainer = {
         let schema = Schema([LedgerEntry.self, ImportedDocument.self, MerchantRule.self, CategoryBudget.self,
-                             CustomCategory.self, Account.self, TransactionRule.self])
+                             CustomCategory.self, Account.self, TransactionRule.self, ChatThread.self])
         do {
             return try ModelContainer(for: schema)
         } catch {

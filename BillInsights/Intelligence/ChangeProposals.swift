@@ -4,20 +4,20 @@ import BillCore
 
 /// Category changes Claude proposes. Nothing is applied until the user taps
 /// Apply in the chat; every applied proposal can be undone.
-struct ChangeProposal: Identifiable {
-    let id = UUID()
+struct ChangeProposal: Identifiable, Codable {
+    var id = UUID()
     var summary: String
     var items: [Item]
     var warnings: [String]
 
-    struct Item: Identifiable {
-        let id = UUID()
+    struct Item: Identifiable, Codable {
+        var id = UUID()
         var title: String
         var detail: String
         var payload: Payload
     }
 
-    enum Payload {
+    enum Payload: Codable {
         /// Move transactions to a category (existing key, or a category created in this proposal by name).
         case recategorize(ids: [UUID], toKey: String?, toNewName: String?, rememberMerchants: [String])
         case rule(text: String, min: Double?, max: Double?, direction: String, toKey: String?, toNewName: String?)
@@ -29,11 +29,13 @@ struct ChangeProposal: Identifiable {
 }
 
 /// What's needed to undo an applied proposal.
-struct UndoRecord {
-    var entries: [(id: UUID, categoryRaw: String, customKey: String?, userSet: Bool)] = []
+struct UndoRecord: Codable {
+    struct EntryState: Codable { var id: UUID; var categoryRaw: String; var customKey: String?; var userSet: Bool }
+    struct MerchantRuleState: Codable { var key: String; var previousRaw: String? }
+    var entries: [EntryState] = []
     var createdRuleIDs: [UUID] = []
     var createdCategoryKeys: [String] = []
-    var merchantRules: [(key: String, previousRaw: String?)] = []
+    var merchantRules: [MerchantRuleState] = []
 }
 
 /// Validates Claude's raw proposal against the real data (on device).
@@ -196,7 +198,7 @@ enum ChangeApplier {
 
         func change(_ e: LedgerEntry, to target: CategoryInfo) {
             if !undo.entries.contains(where: { $0.id == e.id }) {
-                undo.entries.append((e.id, e.categoryRaw, e.customCategoryKey, e.userSetCategory))
+                undo.entries.append(.init(id: e.id, categoryRaw: e.categoryRaw, customKey: e.customCategoryKey, userSet: e.userSetCategory))
             }
             e.setCategory(target)
             e.userSetCategory = true
@@ -211,14 +213,14 @@ enum ChangeApplier {
                     let mk = MerchantNormalizer.key(for: m)
                     let existing = try? context.fetch(FetchDescriptor<MerchantRule>(predicate: #Predicate<MerchantRule> { $0.merchantKey == mk }))
                     if let rule = existing?.first {
-                        undo.merchantRules.append((mk, rule.categoryRaw))
+                        undo.merchantRules.append(.init(key: mk, previousRaw: rule.categoryRaw))
                         rule.categoryRaw = target.key
                         rule.updatedAt = Date()
                     } else {
                         let rule = MerchantRule(merchant: m, category: target.base)
                         rule.categoryRaw = target.key
                         context.insert(rule)
-                        undo.merchantRules.append((mk, nil))
+                        undo.merchantRules.append(.init(key: mk, previousRaw: nil))
                     }
                 }
             case .rule(let text, let minA, let maxA, let dir, let key, let newName):
@@ -246,7 +248,9 @@ enum ChangeApplier {
         }
         let rules = (try? context.fetch(FetchDescriptor<TransactionRule>())) ?? []
         for rule in rules where r.createdRuleIDs.contains(rule.id) { context.delete(rule) }
-        for (mk, previous) in r.merchantRules.reversed() {
+        for saved in r.merchantRules.reversed() {
+            let mk = saved.key
+            let previous = saved.previousRaw
             let existing = try? context.fetch(FetchDescriptor<MerchantRule>(predicate: #Predicate<MerchantRule> { $0.merchantKey == mk }))
             guard let rule = existing?.first else { continue }
             if let previous { rule.categoryRaw = previous } else { context.delete(rule) }

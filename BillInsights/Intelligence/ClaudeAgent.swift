@@ -118,6 +118,11 @@ final class ClaudeAgent {
     }
 
     func reset() { messages.removeAll() }
+
+    /// The raw API conversation (incl. tool calls and thinking blocks), saved
+    /// with the chat so Claude can continue it later. Replayed unchanged.
+    var history: [[String: Any]] { messages }
+    func restore(history: [[String: Any]]) { messages = history }
 }
 
 /// Read-only lookups Claude can call. They run on the iPhone over the user's

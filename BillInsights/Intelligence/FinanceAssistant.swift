@@ -49,9 +49,16 @@ final class FinanceAssistant {
     /// Called after the user applied or undid a proposal: refresh Claude's data
     /// and tell it on the next message.
     func dataChanged(facts: [TxnFact], budgets: [(name: String, key: String, limit: Double)],
-                     catalog: CategoryCatalog, note: String) {
+                     catalog: CategoryCatalog, note: String?) {
         agent.update(facts: facts, budgets: budgets, catalog: catalog)
-        pendingNote = note
+        if let note { pendingNote = note }
+    }
+
+    var agentHistory: [[String: Any]] { agent.history }
+
+    func restore(agentHistory: [[String: Any]], lastQuestion: String?, lastAnswer: String?) {
+        agent.restore(history: agentHistory)
+        if let q = lastQuestion, let a = lastAnswer { lastExchange = (q, a) }
     }
 
     private static let instructions = """

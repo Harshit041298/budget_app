@@ -250,3 +250,25 @@ final class TransactionRule {
         return !text.isEmpty || minAmount != nil || maxAmount != nil || accountKey != nil
     }
 }
+
+/// A saved Ask conversation. Stored only on this iPhone.
+@Model
+final class ChatThread {
+    var id: UUID
+    var title: String
+    var createdAt: Date
+    var updatedAt: Date
+    /// JSON of the visible messages (text, sources, proposals and their state).
+    var messagesData: Data
+    /// JSON of Claude's API conversation, so the chat can be continued.
+    var agentHistoryData: Data
+
+    init(title: String) {
+        id = UUID()
+        self.title = title
+        createdAt = Date()
+        updatedAt = Date()
+        messagesData = Data()
+        agentHistoryData = Data()
+    }
+}

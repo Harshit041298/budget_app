@@ -110,6 +110,7 @@ struct SettingsView: View {
                     try? context.delete(model: CustomCategory.self)
                     try? context.delete(model: Account.self)
                     try? context.delete(model: TransactionRule.self)
+                    try? context.delete(model: ChatThread.self)
                     try? context.save()
                 }
             }

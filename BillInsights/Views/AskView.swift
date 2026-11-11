@@ -10,6 +10,10 @@ struct AskView: View {
     @State private var thinking = false
     @State private var assistant: FinanceAssistant?
     @State private var assistantDataCount = -1
+    @State private var currentThreadID: UUID?
+    @State private var showingChats = false
+    @State private var didRestore = false
+    @AppStorage("lastChatThread") private var lastThreadID = ""
     @FocusState private var inputFocused: Bool
 
     private let suggestions = [
@@ -41,16 +45,86 @@ struct AskView: View {
             .navigationTitle("Ask")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showingChats = true } label: { Image(systemName: "clock.arrow.circlepath") }
+                        .accessibilityLabel("Chats")
+                }
                 if !messages.isEmpty {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("New chat") {
-                            messages = []
-                            assistant?.reset()
-                        }
+                        Button("New chat") { startNewChat() }
                     }
                 }
             }
+            .sheet(isPresented: $showingChats) {
+                ChatListView(currentID: currentThreadID) { thread in
+                    open(thread)
+                } onNew: {
+                    startNewChat()
+                }
+            }
+            .onAppear(perform: restoreLastChat)
         }
+    }
+
+    // MARK: Saved chats
+
+    private func restoreLastChat() {
+        guard !didRestore else { return }
+        didRestore = true
+        guard let id = UUID(uuidString: lastThreadID),
+              let thread = try? context.fetch(FetchDescriptor<ChatThread>(predicate: #Predicate<ChatThread> { $0.id == id })).first
+        else { return }
+        open(thread)
+    }
+
+    private func makeAssistant() -> FinanceAssistant {
+        let catalog = CategoryCatalog.load(context)
+        let budgets = ((try? context.fetch(FetchDescriptor<CategoryBudget>())) ?? []).map {
+            (name: catalog.info(key: $0.categoryRaw).name, key: $0.categoryRaw, limit: $0.monthlyLimit)
+        }
+        assistantDataCount = entries.count
+        return FinanceAssistant(facts: AppData.facts(context: context), budgets: budgets, catalog: catalog)
+    }
+
+    private func open(_ thread: ChatThread) {
+        messages = (try? JSONDecoder().decode([ChatMessage].self, from: thread.messagesData)) ?? []
+        let history = (try? JSONSerialization.jsonObject(with: thread.agentHistoryData)) as? [[String: Any]] ?? []
+        let a = makeAssistant()
+        let lastUser = messages.last(where: { $0.fromUser })?.text
+        let lastAnswer = messages.last(where: { !$0.fromUser })?.text
+        a.restore(agentHistory: history, lastQuestion: lastUser, lastAnswer: lastAnswer)
+        assistant = a
+        currentThreadID = thread.id
+        lastThreadID = thread.id.uuidString
+    }
+
+    private func startNewChat() {
+        saveChat()
+        messages = []
+        assistant = makeAssistant()
+        currentThreadID = nil
+        lastThreadID = ""
+    }
+
+    private func saveChat() {
+        guard !messages.isEmpty else { return }
+        let thread: ChatThread
+        if let id = currentThreadID,
+           let existing = try? context.fetch(FetchDescriptor<ChatThread>(predicate: #Predicate<ChatThread> { $0.id == id })).first {
+            thread = existing
+        } else {
+            let first = messages.first(where: { $0.fromUser })?.text ?? "Chat"
+            thread = ChatThread(title: String(first.prefix(60)))
+            context.insert(thread)
+            currentThreadID = thread.id
+            lastThreadID = thread.id.uuidString
+        }
+        thread.messagesData = (try? JSONEncoder().encode(messages)) ?? Data()
+        if let history = assistant?.agentHistory, JSONSerialization.isValidJSONObject(history) {
+            thread.agentHistoryData = (try? JSONSerialization.data(withJSONObject: history)) ?? Data()
+        }
+        thread.updatedAt = Date()
+        try? context.save()
     }
 
     private var chat: some View {
@@ -149,7 +223,7 @@ struct AskView: View {
         .background(.bar)
     }
 
-    private func refreshAssistant(note: String) {
+    private func refreshAssistant(note: String?) {
         let catalog = CategoryCatalog.load(context)
         let budgets = ((try? context.fetch(FetchDescriptor<CategoryBudget>())) ?? []).map {
             (name: catalog.info(key: $0.categoryRaw).name, key: $0.categoryRaw, limit: $0.monthlyLimit)
@@ -163,6 +237,7 @@ struct AskView: View {
         let selected = messages[i].selected
         let record = ChangeApplier.apply(p, selected: selected, context: context)
         messages[i].proposalState = .applied(record)
+        saveChat()
         let applied = p.items.filter { selected.contains($0.id) }.map(\.title)
         refreshAssistant(note: "I applied these changes: " + applied.joined(separator: "; "))
     }
@@ -172,6 +247,7 @@ struct AskView: View {
               case .applied(let record) = messages[i].proposalState else { return }
         ChangeApplier.undo(record, context: context)
         messages[i].proposalState = .undone
+        saveChat()
         refreshAssistant(note: "I undid the changes you proposed earlier.")
     }
 
@@ -180,13 +256,10 @@ struct AskView: View {
         guard !q.isEmpty, !thinking else { return }
         input = ""
         messages.append(ChatMessage(text: q, fromUser: true))
-        if assistant == nil || assistantDataCount != entries.count {
-            let catalog = CategoryCatalog.load(context)
-            let budgets = ((try? context.fetch(FetchDescriptor<CategoryBudget>())) ?? []).map {
-                (name: catalog.info(key: $0.categoryRaw).name, key: $0.categoryRaw, limit: $0.monthlyLimit)
-            }
-            assistant = FinanceAssistant(facts: AppData.facts(context: context), budgets: budgets, catalog: catalog)
-            assistantDataCount = entries.count
+        if assistant == nil {
+            assistant = makeAssistant()
+        } else if assistantDataCount != entries.count {
+            refreshAssistant(note: nil)   // new imports: refresh data, keep the conversation
         }
         thinking = true
         Task {
@@ -197,13 +270,14 @@ struct AskView: View {
                 message.proposal = reply.proposal
                 if let p = reply.proposal { message.selected = Set(p.items.map(\.id)) }
                 messages.append(message)
+                saveChat()
             }
         }
     }
 }
 
-struct ChatMessage: Identifiable {
-    let id = UUID()
+struct ChatMessage: Identifiable, Codable {
+    var id = UUID()
     let text: String
     let fromUser: Bool
     var source: String? = nil
@@ -211,7 +285,7 @@ struct ChatMessage: Identifiable {
     var selected: Set<UUID> = []
     var proposalState: ProposalState = .pending
 
-    enum ProposalState {
+    enum ProposalState: Codable {
         case pending, dismissed, undone
         case applied(UndoRecord)
     }
@@ -327,6 +401,47 @@ private struct ProposalCard: View {
             .padding(14)
             .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.accentColor.opacity(0.4)))
+        }
+    }
+}
+
+/// Saved conversations, newest first.
+private struct ChatListView: View {
+    @Environment(\.modelContext) private var context
+    @Environment(\.dismiss) private var dismiss
+    @Query(sort: \ChatThread.updatedAt, order: .reverse) private var threads: [ChatThread]
+    let currentID: UUID?
+    let onOpen: (ChatThread) -> Void
+    let onNew: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Button { onNew(); dismiss() } label: { Label("New chat", systemImage: "square.and.pencil") }
+                if threads.isEmpty {
+                    Text("No saved chats yet.").foregroundStyle(.secondary)
+                }
+                ForEach(threads) { t in
+                    Button { onOpen(t); dismiss() } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(t.title).foregroundStyle(.primary).lineLimit(2)
+                                Text(t.updatedAt.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if t.id == currentID { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                        }
+                    }
+                }
+                .onDelete { offsets in
+                    for i in offsets { context.delete(threads[i]) }
+                    try? context.save()
+                }
+            }
+            .navigationTitle("Chats")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
     }
 }
