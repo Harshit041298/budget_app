@@ -16,6 +16,23 @@ final class ClaudeAgent {
     private let maxToolRounds = 6
     private let maxMessages = 60
     private(set) var lookupsLastAnswer = 0
+    /// Human-readable steps taken while answering (for the UI).
+    private(set) var stepsLastAnswer: [String] = []
+    /// Called on the main actor as Claude works, e.g. "Searching transactions…".
+    var onStep: ((String) -> Void)?
+
+    static func stepLabel(_ tool: String) -> String {
+        switch tool {
+        case "get_overview": return "Checked what data you have"
+        case "get_spending_summary": return "Added up your spending"
+        case "search_transactions": return "Searched your transactions"
+        case "get_recurring_charges": return "Looked at subscriptions"
+        case "get_budgets": return "Checked your budgets"
+        case "get_savings_plan": return "Worked out a savings plan"
+        case "propose_changes": return "Prepared suggested changes"
+        default: return "Looked something up"
+        }
+    }
     /// A proposal produced while answering the last message, for the UI to confirm.
     private(set) var pendingProposal: ChangeProposal?
 
@@ -61,6 +78,7 @@ final class ClaudeAgent {
         if messages.count > maxMessages { messages.removeAll() }   // start fresh rather than edit history
         messages.append(["role": "user", "content": text])
         lookupsLastAnswer = 0
+        stepsLastAnswer = []
         pendingProposal = nil
 
         for round in 0...maxToolRounds {
@@ -88,6 +106,9 @@ final class ClaudeAgent {
                     let id = use["id"] as? String ?? ""
                     let name = use["name"] as? String ?? ""
                     let input = use["input"] as? [String: Any] ?? [:]
+                    let label = Self.stepLabel(name)
+                    stepsLastAnswer.append(label)
+                    onStep?(label)
                     let raw: AgentTools.Output
                     if name == "propose_changes" {
                         let (proposal, message) = ProposalBuilder(facts: tools.facts, catalog: catalog,

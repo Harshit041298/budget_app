@@ -23,6 +23,7 @@ struct AskReply {
     let text: String
     let source: AnswerSource
     var proposal: ChangeProposal? = nil
+    var steps: [String] = []
 }
 
 /// "Ask about my money" chat.
@@ -67,7 +68,8 @@ final class FinanceAssistant {
     Never suggest cutting rent/housing, insurance, utilities or health costs. Keep replies short: 2-6 sentences or a few bullets.
     """
 
-    func ask(_ question: String) async -> AskReply {
+    func ask(_ question: String, onStep: ((String) -> Void)? = nil) async -> AskReply {
+        agent.onStep = onStep
         // Claude (when enabled) handles every question as an agent with read-only lookups.
         if CloudAI.isReady {
             do {
@@ -77,7 +79,8 @@ final class FinanceAssistant {
                 let n = agent.lookupsLastAnswer
                 let detail = "\(CloudAI.model.displayName)" + (n > 0 ? " · checked your data \(n)×" : "")
                 lastExchange = (question, text)
-                return AskReply(text: text, source: .cloud(detail), proposal: agent.pendingProposal)
+                return AskReply(text: text, source: .cloud(detail), proposal: agent.pendingProposal,
+                                steps: agent.stepsLastAnswer)
             } catch {
                 let local = await localAnswer(question, allowCloud: false)
                 return AskReply(text: local.text + "\n\n_(Claude unavailable: \(error.localizedDescription))_", source: local.source)

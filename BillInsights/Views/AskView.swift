@@ -8,6 +8,7 @@ struct AskView: View {
     @State private var messages: [ChatMessage] = []
     @State private var input = ""
     @State private var thinking = false
+    @State private var liveSteps: [String] = []
     @State private var assistant: FinanceAssistant?
     @State private var assistantDataCount = -1
     @State private var currentThreadID: UUID?
@@ -130,36 +131,55 @@ struct AskView: View {
     private var chat: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: 22) {
                     if messages.isEmpty {
                         intro
+                            .transition(.opacity.combined(with: .scale(scale: 0.97)))
                     }
                     ForEach($messages) { $m in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Bubble(message: m)
+                        VStack(alignment: .leading, spacing: 10) {
+                            if m.fromUser {
+                                UserMessageView(message: m)
+                            } else {
+                                AssistantMessageView(message: m)
+                            }
                             if m.proposal != nil {
                                 ProposalCard(message: $m,
                                              onApply: { apply(messageID: m.id) },
                                              onUndo: { undo(messageID: m.id) })
+                                    .padding(.leading, 38)
+                            }
+                            if !m.fromUser && m.id == messages.last?.id && !thinking {
+                                followUps.padding(.leading, 38)
                             }
                         }
                         .id(m.id)
+                        .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
+                                                removal: .opacity))
                     }
                     if thinking {
-                        TypingIndicator().id("typing")
+                        ThinkingView(steps: liveSteps)
+                            .id("typing")
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
                     Color.clear.frame(height: 4).id("bottom")
                 }
-                .padding(.horizontal)
-                .padding(.top, 8)
+                .padding(.horizontal, 18)
+                .padding(.top, 12)
+                .animation(.spring(response: 0.45, dampingFraction: 0.85), value: messages.count)
+                .animation(.easeInOut(duration: 0.25), value: thinking)
+                .animation(.easeInOut(duration: 0.25), value: liveSteps)
             }
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
             .onChange(of: messages.count) { _, _ in
-                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                withAnimation(.easeOut(duration: 0.3)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             .onChange(of: thinking) { _, _ in
-                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                withAnimation(.easeOut(duration: 0.3)) { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onChange(of: liveSteps.count) { _, _ in
+                withAnimation(.easeOut(duration: 0.3)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             .onChange(of: inputFocused) { _, focused in
                 if focused {
@@ -168,31 +188,41 @@ struct AskView: View {
                     }
                 }
             }
+            .sensoryFeedback(.impact(weight: .light), trigger: messages.count)
             .safeAreaInset(edge: .bottom) { inputBar }
         }
     }
 
     private var intro: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Ask about your money", systemImage: "sparkles").font(.title3.bold())
-            Text(CloudAI.isReady
-                 ? "Claude looks up your transactions on this iPhone (read-only) and answers. It may ask a quick question if something's unclear."
-                 : "Numbers are calculated from your transactions on this iPhone; the on-device AI explains them. Nothing leaves your phone.")
-                .font(.subheadline).foregroundStyle(.secondary)
-            ForEach(suggestions, id: \.self) { s in
-                Button { send(s) } label: {
-                    HStack {
-                        Text(s).multilineTextAlignment(.leading)
-                        Spacer()
-                        Image(systemName: "arrow.up.right").font(.caption)
-                    }
-                    .font(.subheadline)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(.background.secondary, in: RoundedRectangle(cornerRadius: 14))
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                AIAvatar(size: 44)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Ask about your money").font(.title2.bold())
+                    Text(CloudAI.isReady ? "Powered by \(CloudAI.model.displayName)" : "On-device")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
-                .disabled(entries.isEmpty)
+            }
+            Text(CloudAI.isReady
+                 ? "I look up your transactions on this iPhone (read-only) and answer. If something's unclear, I'll ask."
+                 : "Numbers are calculated from your transactions on this iPhone; nothing leaves your phone.")
+                .font(.subheadline).foregroundStyle(.secondary)
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                ForEach(Self.starters, id: \.text) { s in
+                    Button { send(s.text) } label: {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Image(systemName: s.icon).font(.title3).foregroundStyle(.tint)
+                            Text(s.text).font(.subheadline).multilineTextAlignment(.leading)
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
+                        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
+                    }
+                    .buttonStyle(PressableStyle())
+                    .disabled(entries.isEmpty)
+                }
             }
             if entries.isEmpty {
                 Text("Import some transactions first.").font(.caption).foregroundStyle(.secondary)
@@ -201,24 +231,58 @@ struct AskView: View {
         .padding(.top, 8)
     }
 
+    struct Starter: Hashable { let icon: String; let text: String }
+    static let starters: [Starter] = [
+        Starter(icon: "bag", text: "Where am I spending the most in shopping?"),
+        Starter(icon: "banknote", text: "How can I save $1,500 a month?"),
+        Starter(icon: "fork.knife", text: "How much did I spend on food last month?"),
+        Starter(icon: "repeat", text: "What are my subscriptions costing me?"),
+        Starter(icon: "creditcard", text: "Credit cards vs debit this month?"),
+        Starter(icon: "tag", text: "Fix categories that look wrong")
+    ]
+
+    private var followUps: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(["Tell me more", "Show the transactions", "How can I improve this?"], id: \.self) { f in
+                    Button { send(f) } label: {
+                        Text(f).font(.footnote)
+                            .padding(.horizontal, 12).padding(.vertical, 7)
+                            .background(Capsule().strokeBorder(Color.accentColor.opacity(0.5)))
+                    }
+                    .buttonStyle(PressableStyle())
+                }
+            }
+        }
+        .transition(.opacity)
+    }
+
     private var inputBar: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        let canSend = !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !thinking && !entries.isEmpty
+        return HStack(alignment: .bottom, spacing: 8) {
             TextField("Ask about your money…", text: $input, axis: .vertical)
                 .lineLimit(1...5)
                 .focused($inputFocused)
                 .submitLabel(.send)
                 .onSubmit { send(input) }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(.background.secondary, in: RoundedRectangle(cornerRadius: 20))
+                .padding(.leading, 16)
+                .padding(.vertical, 11)
             Button { send(input) } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 34))
-                    .symbolRenderingMode(.hierarchical)
+                Image(systemName: thinking ? "ellipsis" : "arrow.up")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(canSend ? Color.accentColor : Color.gray.opacity(0.4)))
+                    .symbolEffect(.pulse, isActive: thinking)
             }
-            .disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || thinking || entries.isEmpty)
+            .disabled(!canSend)
+            .padding(.trailing, 6)
+            .padding(.bottom, 5)
+            .animation(.spring(response: 0.3), value: canSend)
         }
-        .padding(.horizontal)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 24))
+        .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(Color.primary.opacity(inputFocused ? 0.15 : 0.06)))
+        .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(.bar)
     }
@@ -255,23 +319,28 @@ struct AskView: View {
         let q = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, !thinking else { return }
         input = ""
-        messages.append(ChatMessage(text: q, fromUser: true))
+        withAnimation { messages.append(ChatMessage(text: q, fromUser: true)) }
         if assistant == nil {
             assistant = makeAssistant()
         } else if assistantDataCount != entries.count {
             refreshAssistant(note: nil)   // new imports: refresh data, keep the conversation
         }
+        liveSteps = []
         thinking = true
         Task {
-            defer { thinking = false }
-            do {
-                let reply = await assistant!.ask(q)
-                var message = ChatMessage(text: reply.text, fromUser: false, source: reply.source.label)
-                message.proposal = reply.proposal
-                if let p = reply.proposal { message.selected = Set(p.items.map(\.id)) }
-                messages.append(message)
-                saveChat()
+            let reply = await assistant!.ask(q) { step in
+                withAnimation { liveSteps.append(step) }
             }
+            var message = ChatMessage(text: reply.text, fromUser: false, source: reply.source.label)
+            message.proposal = reply.proposal
+            message.steps = reply.steps.isEmpty ? nil : reply.steps
+            if let p = reply.proposal { message.selected = Set(p.items.map(\.id)) }
+            withAnimation {
+                thinking = false
+                messages.append(message)
+            }
+            liveSteps = []
+            saveChat()
         }
     }
 }
@@ -284,6 +353,8 @@ struct ChatMessage: Identifiable, Codable {
     var proposal: ChangeProposal? = nil
     var selected: Set<UUID> = []
     var proposalState: ProposalState = .pending
+    /// Steps Claude took (optional so chats saved by older builds still load).
+    var steps: [String]? = nil
 
     enum ProposalState: Codable {
         case pending, dismissed, undone
@@ -291,50 +362,185 @@ struct ChatMessage: Identifiable, Codable {
     }
 }
 
-private struct Bubble: View {
+private struct UserMessageView: View {
     let message: ChatMessage
 
     var body: some View {
-        HStack(alignment: .bottom) {
-            if message.fromUser { Spacer(minLength: 48) }
-            VStack(alignment: .leading, spacing: 4) {
-            Text(LocalizedStringKey(message.text))
+        HStack {
+            Spacer(minLength: 56)
+            Text(message.text)
                 .font(.body)
-                .padding(.horizontal, 14)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 15)
                 .padding(.vertical, 10)
-                .foregroundStyle(message.fromUser ? Color.white : Color.primary)
-                .background(message.fromUser ? Color.accentColor : Color(uiColor: .secondarySystemBackground),
-                            in: RoundedRectangle(cornerRadius: 18))
+                .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                if let source = message.source {
-                    Text(source).font(.caption2).foregroundStyle(.tertiary).padding(.leading, 6)
-                }
-            }
-            if !message.fromUser { Spacer(minLength: 48) }
         }
-        .frame(maxWidth: .infinity, alignment: message.fromUser ? .trailing : .leading)
     }
 }
 
-private struct TypingIndicator: View {
-    @State private var phase = 0.0
+private struct AssistantMessageView: View {
+    let message: ChatMessage
+    @State private var showSteps = false
 
     var body: some View {
-        HStack(spacing: 5) {
-            ForEach(0..<3) { i in
-                Circle()
-                    .frame(width: 8, height: 8)
-                    .opacity(0.3 + 0.7 * abs(sin(phase + Double(i) * 0.6)))
+        HStack(alignment: .top, spacing: 12) {
+            AIAvatar(size: 26)
+            VStack(alignment: .leading, spacing: 8) {
+                RichText(text: message.text)
+                    .textSelection(.enabled)
+                HStack(spacing: 10) {
+                    if let steps = message.steps, !steps.isEmpty {
+                        Button {
+                            withAnimation(.spring(response: 0.35)) { showSteps.toggle() }
+                        } label: {
+                            Label("\(steps.count) step\(steps.count == 1 ? "" : "s")",
+                                  systemImage: showSteps ? "chevron.up" : "list.bullet.indent")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if let source = message.source {
+                        Text(source).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    Button {
+                        UIPasteboard.general.string = message.text
+                    } label: { Image(systemName: "doc.on.doc") }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Copy")
+                }
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                if showSteps, let steps = message.steps {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
+                            Label(step, systemImage: "checkmark.circle").font(.caption)
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(10)
+                    .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
             }
         }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
-        .onAppear {
-            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { phase = .pi }
+    }
+}
+
+/// Lightweight markdown: paragraphs, **bold**/_italic_, bullet and numbered lists, headings.
+private struct RichText: View {
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .heading(let t):
+                    Text(LocalizedStringKey(t)).font(.headline).padding(.top, 4)
+                case .bullet(let t):
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Circle().fill(Color.accentColor).frame(width: 5, height: 5).offset(y: -2)
+                        Text(LocalizedStringKey(t))
+                    }
+                case .numbered(let n, let t):
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("\(n).").foregroundStyle(.secondary).monospacedDigit()
+                        Text(LocalizedStringKey(t))
+                    }
+                case .paragraph(let t):
+                    Text(LocalizedStringKey(t))
+                }
+            }
         }
+        .font(.body)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    enum Block { case heading(String), bullet(String), numbered(Int, String), paragraph(String) }
+
+    var blocks: [Block] {
+        var out: [Block] = []
+        for raw in text.components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+            if line.hasPrefix("#") {
+                out.append(.heading(line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces)))
+            } else if line.hasPrefix("- ") || line.hasPrefix("• ") || line.hasPrefix("* ") {
+                out.append(.bullet(String(line.dropFirst(2))))
+            } else if let dot = line.firstIndex(of: "."), let n = Int(line[..<dot]), n < 100,
+                      line.index(after: dot) < line.endIndex, line[line.index(after: dot)] == " " {
+                out.append(.numbered(n, String(line[line.index(dot, offsetBy: 2)...])))
+            } else {
+                out.append(.paragraph(line))
+            }
+        }
+        return out
+    }
+}
+
+private struct AIAvatar: View {
+    var size: CGFloat = 26
+
+    var body: some View {
+        Image(systemName: "sparkles")
+            .font(.system(size: size * 0.5, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(
+                LinearGradient(colors: [Color.accentColor, .purple], startPoint: .topLeading, endPoint: .bottomTrailing),
+                in: Circle()
+            )
+    }
+}
+
+/// Shown while Claude works: animated dots plus the live steps it's taking.
+private struct ThinkingView: View {
+    let steps: [String]
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            AIAvatar(size: 26)
+                .symbolEffect(.pulse)
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
+                    Label(step, systemImage: "checkmark.circle.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                }
+                HStack(spacing: 8) {
+                    TypingDots()
+                    Text(steps.isEmpty ? "Thinking…" : "Working on it…")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+private struct TypingDots: View {
+    var body: some View {
+        TimelineView(.animation) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 4) {
+                ForEach(0..<3) { i in
+                    Circle()
+                        .frame(width: 7, height: 7)
+                        .scaleEffect(0.6 + 0.4 * (0.5 + 0.5 * sin(t * 5 - Double(i) * 0.8)))
+                        .opacity(0.4 + 0.6 * (0.5 + 0.5 * sin(t * 5 - Double(i) * 0.8)))
+                }
+            }
+            .foregroundStyle(.tint)
+        }
+    }
+}
+
+private struct PressableStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .opacity(configuration.isPressed ? 0.85 : 1)
+            .animation(.spring(response: 0.25), value: configuration.isPressed)
     }
 }
 
