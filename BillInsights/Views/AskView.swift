@@ -60,8 +60,16 @@ struct AskView: View {
                     if messages.isEmpty {
                         intro
                     }
-                    ForEach(messages) { m in
-                        Bubble(message: m).id(m.id)
+                    ForEach($messages) { $m in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Bubble(message: m)
+                            if m.proposal != nil {
+                                ProposalCard(message: $m,
+                                             onApply: { apply(messageID: m.id) },
+                                             onUndo: { undo(messageID: m.id) })
+                            }
+                        }
+                        .id(m.id)
                     }
                     if thinking {
                         TypingIndicator().id("typing")
@@ -141,6 +149,32 @@ struct AskView: View {
         .background(.bar)
     }
 
+    private func refreshAssistant(note: String) {
+        let catalog = CategoryCatalog.load(context)
+        let budgets = ((try? context.fetch(FetchDescriptor<CategoryBudget>())) ?? []).map {
+            (name: catalog.info(key: $0.categoryRaw).name, key: $0.categoryRaw, limit: $0.monthlyLimit)
+        }
+        assistant?.dataChanged(facts: AppData.facts(context: context), budgets: budgets, catalog: catalog, note: note)
+        assistantDataCount = entries.count
+    }
+
+    private func apply(messageID: UUID) {
+        guard let i = messages.firstIndex(where: { $0.id == messageID }), let p = messages[i].proposal else { return }
+        let selected = messages[i].selected
+        let record = ChangeApplier.apply(p, selected: selected, context: context)
+        messages[i].proposalState = .applied(record)
+        let applied = p.items.filter { selected.contains($0.id) }.map(\.title)
+        refreshAssistant(note: "I applied these changes: " + applied.joined(separator: "; "))
+    }
+
+    private func undo(messageID: UUID) {
+        guard let i = messages.firstIndex(where: { $0.id == messageID }),
+              case .applied(let record) = messages[i].proposalState else { return }
+        ChangeApplier.undo(record, context: context)
+        messages[i].proposalState = .undone
+        refreshAssistant(note: "I undid the changes you proposed earlier.")
+    }
+
     private func send(_ text: String) {
         let q = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, !thinking else { return }
@@ -151,7 +185,7 @@ struct AskView: View {
             let budgets = ((try? context.fetch(FetchDescriptor<CategoryBudget>())) ?? []).map {
                 (name: catalog.info(key: $0.categoryRaw).name, key: $0.categoryRaw, limit: $0.monthlyLimit)
             }
-            assistant = FinanceAssistant(facts: AppData.facts(context: context), budgets: budgets)
+            assistant = FinanceAssistant(facts: AppData.facts(context: context), budgets: budgets, catalog: catalog)
             assistantDataCount = entries.count
         }
         thinking = true
@@ -159,17 +193,28 @@ struct AskView: View {
             defer { thinking = false }
             do {
                 let reply = await assistant!.ask(q)
-                messages.append(ChatMessage(text: reply.text, fromUser: false, source: reply.source.label))
+                var message = ChatMessage(text: reply.text, fromUser: false, source: reply.source.label)
+                message.proposal = reply.proposal
+                if let p = reply.proposal { message.selected = Set(p.items.map(\.id)) }
+                messages.append(message)
             }
         }
     }
 }
 
-struct ChatMessage: Identifiable, Equatable {
+struct ChatMessage: Identifiable {
     let id = UUID()
     let text: String
     let fromUser: Bool
     var source: String? = nil
+    var proposal: ChangeProposal? = nil
+    var selected: Set<UUID> = []
+    var proposalState: ProposalState = .pending
+
+    enum ProposalState {
+        case pending, dismissed, undone
+        case applied(UndoRecord)
+    }
 }
 
 private struct Bubble: View {
@@ -215,6 +260,73 @@ private struct TypingIndicator: View {
         .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
         .onAppear {
             withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { phase = .pi }
+        }
+    }
+}
+
+/// Claude's proposed changes, shown for confirmation. Nothing changes until Apply.
+private struct ProposalCard: View {
+    @Binding var message: ChatMessage
+    let onApply: () -> Void
+    let onUndo: () -> Void
+
+    var body: some View {
+        if let p = message.proposal {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Proposed changes", systemImage: "wand.and.stars").font(.subheadline.bold())
+                Text(p.summary).font(.caption).foregroundStyle(.secondary)
+                ForEach(p.items) { item in
+                    HStack(alignment: .top, spacing: 10) {
+                        if case .pending = message.proposalState {
+                            Button {
+                                if message.selected.contains(item.id) { message.selected.remove(item.id) }
+                                else { message.selected.insert(item.id) }
+                            } label: {
+                                Image(systemName: message.selected.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                                    .font(.title3)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.tint)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.title).font(.subheadline.weight(.semibold))
+                            Text(item.detail).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                ForEach(p.warnings, id: \.self) { w in
+                    Label(w, systemImage: "info.circle").font(.caption2).foregroundStyle(.orange)
+                }
+                switch message.proposalState {
+                case .pending:
+                    HStack {
+                        Button {
+                            onApply()
+                        } label: {
+                            Text(message.selected.count == p.items.count ? "Apply all" : "Apply \(message.selected.count)")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(message.selected.isEmpty)
+                        Button("Dismiss") { message.proposalState = .dismissed }
+                            .buttonStyle(.bordered)
+                    }
+                case .applied:
+                    HStack {
+                        Label("Applied", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                        Spacer()
+                        Button("Undo", action: onUndo).buttonStyle(.bordered)
+                    }
+                    .font(.subheadline)
+                case .dismissed:
+                    Text("Dismissed — nothing was changed.").font(.caption).foregroundStyle(.secondary)
+                case .undone:
+                    Text("Undone — everything is back as it was.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(14)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.accentColor.opacity(0.4)))
         }
     }
 }

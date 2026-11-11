@@ -22,6 +22,7 @@ enum AnswerSource: Equatable {
 struct AskReply {
     let text: String
     let source: AnswerSource
+    var proposal: ChangeProposal? = nil
 }
 
 /// "Ask about my money" chat.
@@ -37,9 +38,20 @@ final class FinanceAssistant {
     private var lastQuery: AskEngine.Query?
     private let agent: ClaudeAgent
 
-    init(facts: [TxnFact], budgets: [(name: String, key: String, limit: Double)] = [], now: Date = Date()) {
+    private var pendingNote: String?
+
+    init(facts: [TxnFact], budgets: [(name: String, key: String, limit: Double)] = [],
+         catalog: CategoryCatalog = CategoryCatalog([]), now: Date = Date()) {
         self.facts = facts
-        agent = ClaudeAgent(facts: facts, budgets: budgets)
+        agent = ClaudeAgent(facts: facts, budgets: budgets, catalog: catalog)
+    }
+
+    /// Called after the user applied or undid a proposal: refresh Claude's data
+    /// and tell it on the next message.
+    func dataChanged(facts: [TxnFact], budgets: [(name: String, key: String, limit: Double)],
+                     catalog: CategoryCatalog, note: String) {
+        agent.update(facts: facts, budgets: budgets, catalog: catalog)
+        pendingNote = note
     }
 
     private static let instructions = """
@@ -52,11 +64,13 @@ final class FinanceAssistant {
         // Claude (when enabled) handles every question as an agent with read-only lookups.
         if CloudAI.isReady {
             do {
-                let text = try await agent.send(question)
+                let message = pendingNote.map { "(\($0))\n\(question)" } ?? question
+                pendingNote = nil
+                let text = try await agent.send(message)
                 let n = agent.lookupsLastAnswer
                 let detail = "\(CloudAI.model.displayName)" + (n > 0 ? " · checked your data \(n)×" : "")
                 lastExchange = (question, text)
-                return AskReply(text: text, source: .cloud(detail))
+                return AskReply(text: text, source: .cloud(detail), proposal: agent.pendingProposal)
             } catch {
                 let local = await localAnswer(question, allowCloud: false)
                 return AskReply(text: local.text + "\n\n_(Claude unavailable: \(error.localizedDescription))_", source: local.source)
