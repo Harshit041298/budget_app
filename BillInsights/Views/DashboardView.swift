@@ -208,8 +208,10 @@ struct DashboardView: View {
         let incomeOverride = UserDefaults.standard.double(forKey: "incomeOverride")
         return Card(title: "Savings goal", systemImage: "banknote") {
             if target > 0 {
-                let progress = SavingsProgress(facts: facts, target: target, incomeOverride: incomeOverride > 0 ? incomeOverride : nil)
-                let plan = SavingsPlanner.plan(SavingsPlanner.baseline(facts, incomeOverride: incomeOverride > 0 ? incomeOverride : nil), target: target)
+                let baseline = SavingsPlanner.baseline(facts, incomeOverride: incomeOverride > 0 ? incomeOverride : nil)
+                let progress = SavingsProgress(facts: facts, target: target,
+                                               expectedIncome: incomeOverride > 0 ? incomeOverride : baseline.avgIncome)
+                let plan = SavingsPlanner.plan(baseline, target: target)
                 ProgressView(value: min(max(progress.projected / target, 0), 1))
                     .tint(progress.projected >= target ? Color.green : Color.orange)
                 Text(progress.summary).font(.subheadline)

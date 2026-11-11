@@ -13,8 +13,10 @@ struct SavingsCoachView: View {
     @AppStorage("countAmazonOrders") private var countAmazon = false
     @AppStorage("savingsTarget") private var target: Double = 0
     @AppStorage("incomeOverride") private var incomeOverride: Double = 0
-    @State private var draftTarget: Double?
-    @State private var draftIncome: Double?
+    @State private var draftTarget = ""
+    @State private var draftIncome = ""
+    @State private var savedMessage: String?
+    @FocusState private var focusedField: Int?
     @State private var advice: GenSavingsAdvice?
     @State private var cloudAdvice: String?
     @State private var thinking = false
@@ -27,30 +29,45 @@ struct SavingsCoachView: View {
         let goal = target > 0 ? target : 1200
         let baseline = SavingsPlanner.baseline(facts, incomeOverride: incomeOverride > 0 ? incomeOverride : nil)
         let plan = SavingsPlanner.plan(baseline, target: goal)
-        let progress = SavingsProgress(facts: facts, target: goal, incomeOverride: incomeOverride > 0 ? incomeOverride : nil)
+        let progress = SavingsProgress(facts: facts, target: goal,
+                                       expectedIncome: incomeOverride > 0 ? incomeOverride : baseline.avgIncome)
 
         List {
             Section {
                 HStack {
                     Text("Save each month")
                     Spacer()
-                    TextField("1200", value: $draftTarget, format: .currency(code: "CAD").precision(.fractionLength(0)))
-                        .keyboardType(.numberPad)
+                    Text("$").foregroundStyle(.secondary)
+                    TextField("1200", text: $draftTarget)
+                        .keyboardType(.decimalPad)
                         .multilineTextAlignment(.trailing)
-                        .frame(width: 120)
-                        .onSubmit { commit() }
+                        .frame(width: 100)
+                        .focused($focusedField, equals: 1)
                 }
                 HStack {
                     Text("Monthly take-home pay")
                     Spacer()
-                    TextField(baseline.avgIncome > 0 && incomeOverride == 0 ? money(baseline.avgIncome) : "Auto",
-                              value: $draftIncome, format: .currency(code: "CAD").precision(.fractionLength(0)))
-                        .keyboardType(.numberPad)
+                    Text("$").foregroundStyle(.secondary)
+                    TextField(baseline.avgIncome > 0 ? "\(Int(baseline.avgIncome.rounded())) (auto)" : "Auto",
+                              text: $draftIncome)
+                        .keyboardType(.decimalPad)
                         .multilineTextAlignment(.trailing)
-                        .frame(width: 120)
-                        .onSubmit { commit() }
+                        .frame(width: 130)
+                        .focused($focusedField, equals: 2)
                 }
-                Button("Save goal") { commit() }
+                Button {
+                    commit()
+                } label: {
+                    Label("Save goal", systemImage: "checkmark.circle.fill").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                if let savedMessage {
+                    Label(savedMessage, systemImage: "checkmark.seal.fill")
+                        .font(.subheadline).foregroundStyle(.green)
+                } else if target > 0 {
+                    Text("Current goal: \(money(target)) a month" + (incomeOverride > 0 ? " · pay set to \(money(incomeOverride))" : ""))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             } header: {
                 Text("Your goal")
             } footer: {
@@ -164,9 +181,15 @@ struct SavingsCoachView: View {
             }
         }
         .navigationTitle("Savings coach")
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { focusedField = nil }
+            }
+        }
         .onAppear {
-            draftTarget = target > 0 ? target : 1200
-            draftIncome = incomeOverride > 0 ? incomeOverride : nil
+            draftTarget = String(Int((target > 0 ? target : 1200).rounded()))
+            draftIncome = incomeOverride > 0 ? String(Int(incomeOverride.rounded())) : ""
         }
     }
 
@@ -178,11 +201,28 @@ struct SavingsCoachView: View {
         }
     }
 
+    private func parse(_ s: String) -> Double? {
+        let cleaned = s.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        return Double(cleaned)
+    }
+
     private func commit() {
-        if let t = draftTarget, t > 0 { target = t }
-        incomeOverride = max(0, draftIncome ?? 0)
+        focusedField = nil
+        guard let t = parse(draftTarget), t > 0 else {
+            savedMessage = nil
+            return
+        }
+        target = t
+        incomeOverride = max(0, parse(draftIncome) ?? 0)
         applied = false
         advice = nil
+        cloudAdvice = nil
+        savedMessage = "Saved: \(money(t)) a month" + (incomeOverride > 0 ? " · pay \(money(incomeOverride))" : "")
+        Task {
+            try? await Task.sleep(for: .seconds(4))
+            savedMessage = nil
+        }
     }
 
     private func applyAsBudgets(_ plan: SavingsPlan) {
@@ -230,15 +270,19 @@ struct SavingsProgress {
     let projected: Double
     let summary: String
 
-    init(facts: [TxnFact], target: Double, incomeOverride: Double?, now: Date = Date()) {
+    /// - expectedIncome: the user's pay if entered, else their recent average income.
+    init(facts: [TxnFact], target: Double, expectedIncome: Double, now: Date = Date()) {
         let month = SpendingAnalytics.inMonth(facts, now)
+        let monthName = now.formatted(.dateTime.month(.wide))
         let incomeSoFar = SpendingAnalytics.totalIncome(month)
-        let income = max(incomeOverride ?? 0, incomeSoFar)
+        let income = max(expectedIncome, incomeSoFar)
         let projectedSpend = SpendingAnalytics.forecast(facts, month: now, now: now) ?? SpendingAnalytics.totalSpend(month)
         let p = income - projectedSpend
-        projected = p
-        if income == 0 {
-            summary = "No income recorded this month yet. Projected spending: \(money(projectedSpend))."
+        projected = month.isEmpty ? 0 : p
+        if month.isEmpty {
+            summary = "No \(monthName) transactions imported yet. Import this month's statement or CSV (or log purchases with Apple Pay) to track your progress."
+        } else if income == 0 {
+            summary = "No income found yet. Enter your monthly take-home pay above. Projected spending: \(money(projectedSpend))."
         } else if p >= target {
             summary = "On track to save about \(money(p)) of your \(money(target)) goal. 🎉"
         } else {
