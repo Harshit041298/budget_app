@@ -1,0 +1,50 @@
+name: Build iPhone app
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  test-core:
+    name: BillCore unit tests
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select newest Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+      - name: swift test
+        working-directory: Packages/BillCore
+        run: swift test
+
+  build-ipa:
+    name: Build unsigned .ipa
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select newest Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          xcodebuild -version
+      - name: Build (no code signing)
+        run: |
+          set -o pipefail
+          xcodebuild -project BillInsights.xcodeproj -scheme BillInsights \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee xcodebuild.log | grep -E "error:|warning: .*(deprecated|will be an error)|BUILD (SUCCEEDED|FAILED)" || true
+          grep -q "BUILD SUCCEEDED" xcodebuild.log
+      - name: Package .ipa
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/BillInsights.app Payload/
+          zip -qr BillInsights-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BillInsights-unsigned-ipa
+          path: BillInsights-unsigned.ipa
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xcodebuild-log
+          path: xcodebuild.log
