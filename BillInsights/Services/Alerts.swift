@@ -45,6 +45,16 @@ enum Alerts {
         }
     }
 
+    /// Asks the user to add the amount of an Apple Pay purchase the card didn't share.
+    static func notifyMissingAmount(merchant: String) async {
+        let content = UNMutableNotificationContent()
+        content.title = "Add the amount for \(merchant)"
+        content.body = "Your Apple Pay purchase was logged, but your card didn't share the amount. Tap to add it in Bill Insights."
+        content.sound = .default
+        try? await UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "applepay-missing-\(UUID().uuidString)", content: content, trigger: nil))
+    }
+
     /// Schedules a reminder 2 days before each detected recurring bill.
     static func rescheduleBillReminders(context: ModelContext, now: Date = Date()) async {
         let center = UNUserNotificationCenter.current()

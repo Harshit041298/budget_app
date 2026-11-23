@@ -416,3 +416,15 @@ final class RedactorTests: XCTestCase {
         XCTAssertEqual(Redactor.forCloud("Card ••1234"), "Card ••")
     }
 }
+
+
+final class LiveMatcherUnknownAmountTests: XCTestCase {
+    func testZeroAmountMatchesByMerchant() {
+        let l = UUID(), s = UUID()
+        let d = { (day: Int) in DateParsing.make(year: 2026, month: 11, day: day)! }
+        let m = LiveMatcher.match(live: [.init(id: l, date: d(20), amount: 0, merchant: "Tim Hortons")],
+                                  statement: [.init(id: s, date: d(21), amount: 4.5, merchant: "TIM HORTONS #2345 TORONTO ON"),
+                                              .init(id: UUID(), date: d(21), amount: 9.0, merchant: "SHELL C123")])
+        XCTAssertEqual(m[l], s)
+    }
+}

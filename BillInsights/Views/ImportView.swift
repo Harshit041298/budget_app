@@ -92,6 +92,9 @@ struct ImportView: View {
                             """)
                             Text("When you import that month's CIBC statement or CSV later, matching purchases are merged automatically, so nothing is counted twice. Only Apple Pay taps are caught — online and physical-card purchases come from the statement.")
                                 .foregroundStyle(.secondary)
+                            Text("Not working? In the automation turn on **Notify** and make sure it says **Run Immediately**. Some cards don't share the amount with Wallet — those purchases are still logged and you'll get a notification to add the amount.")
+                                .foregroundStyle(.secondary)
+                            NavigationLink("Recent automation runs") { ApplePayLogView() }
                         }
                         .font(.footnote)
                     } label: {
@@ -217,5 +220,25 @@ struct DocumentScanner: UIViewControllerRepresentable {
         func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) {
             parent.onCancel()
         }
+    }
+}
+
+/// Shows what the Apple Pay automation received on its last runs (on-device only).
+struct ApplePayLogView: View {
+    var body: some View {
+        List {
+            Section {
+                if ApplePayLog.entries.isEmpty {
+                    Text("No runs recorded yet. If you've paid with Apple Pay since setting up the automation, the automation isn't running — check it's set to Run Immediately and that the card you used is selected.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+                ForEach(Array(ApplePayLog.entries.enumerated()), id: \.offset) { _, line in
+                    Text(line).font(.footnote)
+                }
+            } footer: {
+                Text("✓ means the detail was received from Wallet; ✗ means your card didn't share it.")
+            }
+        }
+        .navigationTitle("Automation runs")
     }
 }

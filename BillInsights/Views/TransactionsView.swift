@@ -137,7 +137,11 @@ struct EntryRow: View {
                 if entry.source == .amazonOrderHistory {
                     Text(entry.linkedEntryID == nil ? "order" : "matched").font(.caption2).foregroundStyle(.secondary)
                 } else if entry.source == .applePay {
-                    Image(systemName: "wave.3.right").font(.caption2).foregroundStyle(.secondary)
+                    if entry.amount == 0 {
+                        Text("Add amount").font(.caption2.bold()).foregroundStyle(.orange)
+                    } else {
+                        Image(systemName: "wave.3.right").font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
             }
         }

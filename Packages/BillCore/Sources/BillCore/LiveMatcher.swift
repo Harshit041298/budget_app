@@ -25,8 +25,10 @@ public enum LiveMatcher {
                 let days = DateParsing.days(from: l.date, to: s.date)
                 guard days >= -1.5 && days <= 5.5 else { continue }
                 let exact = abs(s.amount - l.amount) < 0.015
-                let tipped = s.amount > l.amount && s.amount <= l.amount * 1.3 && similar(l.merchant, s.merchant)
-                guard exact || tipped else { continue }
+                let tipped = l.amount > 0 && s.amount > l.amount && s.amount <= l.amount * 1.3 && similar(l.merchant, s.merchant)
+                // Logged without an amount (card didn't share it): match on merchant + date.
+                let unknownAmount = l.amount == 0 && similar(l.merchant, s.merchant)
+                guard exact || tipped || unknownAmount else { continue }
                 // Lower is better: prefer exact amounts, similar names, close dates.
                 let score = abs(days) + (exact ? 0 : 3) + (similar(l.merchant, s.merchant) ? 0 : 2)
                 if best == nil || score < best!.score { best = (s.id, score) }

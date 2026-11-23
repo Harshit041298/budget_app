@@ -260,7 +260,7 @@ final class ImportService {
                 s.category = l.category
                 s.userSetCategory = true
             }
-            if !l.notes.isEmpty { s.notes = l.notes }
+            if !l.notes.isEmpty && l.amount > 0 { s.notes = l.notes }
             if s.items.isEmpty && !l.items.isEmpty { s.items = l.items }
             context.delete(l)
         }
